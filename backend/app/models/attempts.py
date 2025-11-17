@@ -13,3 +13,4 @@ class Attempt(Base):
     num_attempts = Column(SmallInteger)
     time_spent_secs = Column(Integer)
     hints_used = Column(SmallInteger, default=0)
+    round_id = Column(UUID(as_uuid=True), ForeignKey("rounds.id"))
