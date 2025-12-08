@@ -11,8 +11,6 @@ class User(Base):
     username = Column(Text, nullable=False)
     password = Column(Text)  # optional: teacher ima, student nema
     role = Column(Text, nullable=False)
-  #  topic_id = Column(UUID(as_uuid=True), ForeignKey("topics.id", ondelete="CASCADE"))
-    class_code = Column(Text, ForeignKey("users.class_code", ondelete="CASCADE"), nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
     __table_args__ = (CheckConstraint("role IN ('student','teacher')", name="role_check"),)
