@@ -1,27 +1,46 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { Spinner } from '@/components';
+import { useAuthStore } from '@/lib/store';
 import { EMOJI_MAP, PASSWORD_KEYS, getEmoji } from '@/lib/utils';
-// import { useAuthStore } from '@/lib/store'; // Uncomment when backend is ready
 
 export default function LoginPage() {
     const router = useRouter();
 
+    // Auth store
+    const {
+        loginAsStudent,
+        loginAsTeacher,
+        isLoading,
+        error,
+        clearError,
+        isAuthenticated,
+        user,
+        isHydrated,
+    } = useAuthStore();
+
     // Form state - password stores letters (A, B, C, D, E), not emojis
+    // These letters form the class_code for student login
     const [username, setUsername] = useState('');
-    const [password, setPassword] = useState<string[]>(['', '', '', '']);
+    const [password, setPassword] = useState<string[]>(['', '', '']);
     const [teacherPassword, setTeacherPassword] = useState('');
     const [isTeacherMode, setIsTeacherMode] = useState(false);
 
-    // UI state (will be replaced by store state when backend is ready)
-    const [isLoading, setIsLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+    // Local validation error (separate from API error)
+    const [validationError, setValidationError] = useState<string | null>(null);
 
-    // Uncomment when backend is ready:
-    // const { loginAsStudent, loginAsTeacher, isLoading, error, clearError } = useAuthStore();
+    // Redirect if already authenticated
+    useEffect(() => {
+        if (isHydrated && isAuthenticated && user) {
+            const dashboardPath = user.role === 'teacher'
+                ? '/teacher/dashboard'
+                : '/student/dashboard';
+            router.push(dashboardPath);
+        }
+    }, [isHydrated, isAuthenticated, user, router]);
 
     const handleEmojiClick = (key: string) => {
         const emptyIndex = password.findIndex(p => p === '');
@@ -41,28 +60,34 @@ export default function LoginPage() {
         setPassword(['', '', '', '']);
     };
 
-    const clearError = () => {
-        setError(null);
+    const handleClearError = () => {
+        clearError();
+        setValidationError(null);
     };
 
     const isPasswordComplete = password.every(p => p !== '');
     const dashboardPath = isTeacherMode ? '/teacher/dashboard' : '/student/dashboard';
 
+    // Combined error display
+    const displayError = validationError || error;
+
     // Validation
     const validateForm = (): boolean => {
+        setValidationError(null);
+
         if (!username.trim()) {
-            setError('Molimo unesite ime');
+            setValidationError('Molimo unesite ime');
             return false;
         }
 
         if (isTeacherMode) {
             if (!teacherPassword.trim()) {
-                setError('Molimo unesite lozinku');
+                setValidationError('Molimo unesite lozinku');
                 return false;
             }
         } else {
             if (!isPasswordComplete) {
-                setError('Molimo odaberite 4 emoji za lozinku');
+                setValidationError('Molimo odaberite 4 emoji za lozinku');
                 return false;
             }
         }
@@ -72,41 +97,35 @@ export default function LoginPage() {
 
     // Handle login
     const handleLogin = async () => {
-        clearError();
+        handleClearError();
 
         if (!validateForm()) {
             return;
         }
 
-        setIsLoading(true);
+        let success: boolean;
 
-        try {
-            // ============================================================
-            // TODO: Uncomment this block when backend is ready
-            // ============================================================
-            // let success: boolean;
-            // 
-            // if (isTeacherMode) {
-            //     success = await loginAsTeacher(username, teacherPassword);
-            // } else {
-            //     success = await loginAsStudent(username, password);
-            // }
-            // 
-            // if (success) {
-            //     router.push(dashboardPath);
-            // }
-            // ============================================================
+        if (isTeacherMode) {
+            success = await loginAsTeacher(username.trim(), teacherPassword);
+        } else {
+            // Convert emoji password (letters A-E) to class_code string
+            const classCode = password.join('');
+            success = await loginAsStudent(username.trim(), classCode);
+        }
 
-            // Temporary: Simulate loading and navigate directly
-            await new Promise(resolve => setTimeout(resolve, 800));
+        if (success) {
             router.push(dashboardPath);
-
-        } catch (err) {
-            setError('Došlo je do greške');
-        } finally {
-            setIsLoading(false);
         }
     };
+
+    // Show loading while hydrating from localStorage
+    if (!isHydrated) {
+        return (
+            <main className="min-h-screen flex items-center justify-center">
+                <Spinner />
+            </main>
+        );
+    }
 
     return (
         <main className="min-h-screen flex items-center justify-center p-6 relative overflow-hidden">
@@ -127,14 +146,14 @@ export default function LoginPage() {
                 </div>
 
                 {/* Error Message */}
-                {error && (
+                {displayError && (
                     <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl">
                         <div className="flex items-center justify-between">
                             <p className="text-red-600 dark:text-red-400 text-sm">
-                                ⚠️ {error}
+                                ⚠️ {displayError}
                             </p>
                             <button
-                                onClick={clearError}
+                                onClick={handleClearError}
                                 className="text-red-400 hover:text-red-600 transition-colors"
                             >
                                 ✕
@@ -173,16 +192,17 @@ export default function LoginPage() {
                             onChange={(e) => setTeacherPassword(e.target.value)}
                             placeholder="Unesite lozinku..."
                             disabled={isLoading}
+                            onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
                             className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 dark:border-gray-700 
                                        bg-white dark:bg-gray-800 focus:border-emerald-500 dark:focus:border-emerald-400 
                                        outline-none transition-colors text-lg disabled:opacity-50 disabled:cursor-not-allowed"
                         />
                     </div>
                 ) : (
-                    /* Student: Emoji Password */
+                    /* Student: Emoji Password (Class Code) */
                     <div className="mb-6">
                         <label className="block text-sm font-medium mb-2 text-gray-600 dark:text-gray-300">
-                            🔐 Lozinka
+                            🔐 Šifra razreda
                         </label>
 
                         {/* Password Slots */}
@@ -219,7 +239,7 @@ export default function LoginPage() {
 
                         {/* Emoji Selection */}
                         <div className={`bg-gray-50 dark:bg-gray-800/50 rounded-xl p-4 ${isLoading ? 'opacity-50' : ''}`}>
-                            <p className="text-xs text-gray-400 text-center mb-3">Odaberi emoji za lozinku:</p>
+                            <p className="text-xs text-gray-400 text-center mb-3">Odaberi emoji za šifru razreda:</p>
                             <div className="flex justify-center gap-2 flex-wrap">
                                 {PASSWORD_KEYS.map((key) => (
                                     <button
@@ -266,7 +286,7 @@ export default function LoginPage() {
                     <button
                         onClick={() => {
                             setIsTeacherMode(!isTeacherMode);
-                            clearError();
+                            handleClearError();
                         }}
                         disabled={isLoading}
                         className={`relative w-14 h-7 rounded-full transition-all duration-300 

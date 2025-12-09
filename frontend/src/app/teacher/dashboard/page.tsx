@@ -1,10 +1,44 @@
 'use client';
 
-import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useEffect } from 'react';
+
+import { Spinner } from '@/components';
+import { useAuthStore } from '@/lib/store';
 
 export default function TeacherDashboard() {
+    const router = useRouter();
+    const { user, isAuthenticated, isHydrated, logout } = useAuthStore();
 
-    const students: any[] = [];
+    const students: { id: string; name: string; quizzes: number; avgScore: number }[] = [];
+
+    // Redirect to login if not authenticated
+    useEffect(() => {
+        if (isHydrated && (!isAuthenticated || !user)) {
+            router.push('/');
+        }
+    }, [isHydrated, isAuthenticated, user, router]);
+
+    // Redirect students to their dashboard
+    useEffect(() => {
+        if (isHydrated && user && user.role === 'student') {
+            router.push('/student/dashboard');
+        }
+    }, [isHydrated, user, router]);
+
+    const handleLogout = () => {
+        logout();
+        router.push('/');
+    };
+
+    // Show loading while hydrating or redirecting
+    if (!isHydrated || !isAuthenticated || !user || user.role !== 'teacher') {
+        return (
+            <main className="min-h-screen flex items-center justify-center">
+                <Spinner />
+            </main>
+        );
+    }
 
     return (
         <main className="min-h-screen relative">
@@ -13,15 +47,15 @@ export default function TeacherDashboard() {
                 <div className="flex items-center gap-3 sm:gap-4">
                     <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background: 'var(--card-bg)', border: '1px solid var(--card-border)' }}>
                         <span className="text-xl">👨‍🏫</span>
-                        <span className="font-medium">Profesor</span>
+                        <span className="font-medium">{user.username}</span>
                     </div>
-                    <Link
-                        href="/"
+                    <button
+                        onClick={handleLogout}
                         className="btn btn-outline flex items-center gap-2 !py-2 !px-4"
                     >
                         <span>Odjava</span>
                         <span className="text-lg">🚪</span>
-                    </Link>
+                    </button>
                 </div>
             </header>
 

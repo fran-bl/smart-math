@@ -1,9 +1,8 @@
-
 import { User } from './user';
 
 export interface StudentLoginRequest {
     username: string;
-    emojiPassword: string[]; // Array of 4 letter keys (A, B, C, D, E) - emojis on UI
+    classCode: string; // Class code formed from emoji password (e.g., "ABCD")
 }
 
 export interface TeacherLoginRequest {
@@ -14,6 +13,25 @@ export interface TeacherLoginRequest {
 export type LoginRequest =
     | { role: 'student'; data: StudentLoginRequest }
     | { role: 'teacher'; data: TeacherLoginRequest };
+
+// Backend JWT token response from /auth/my-token
+export interface TokenResponse {
+    access_token: string;
+    token_type: string;
+}
+
+// Decoded JWT payload
+export interface JWTPayload {
+    sub: string; // username
+    id: string; // user id
+    exp: number; // expiration timestamp
+}
+
+// User info from /auth/me
+export interface MeResponse {
+    username: string;
+    role: 'student' | 'teacher';
+}
 
 export interface AuthResponse {
     success: boolean;

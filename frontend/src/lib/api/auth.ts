@@ -1,35 +1,41 @@
 // Authentication API methods
 
 import {
-    AuthResponse,
+    MeResponse,
     StudentLoginRequest,
     TeacherLoginRequest,
+    TokenResponse,
 } from '@/models';
 import { api, ApiError } from './client';
 
+const TOKEN_KEY = 'auth_token';
+
 /**
- * Login as a student with emoji password
+ * Login as a student with class code (emoji password)
  */
 export async function loginStudent(
     credentials: StudentLoginRequest
-): Promise<AuthResponse> {
+): Promise<{ success: boolean; token?: string; error?: string }> {
     try {
-        const response = await api.post<AuthResponse>('/api/auth/student/login', {
+        const response = await api.post<TokenResponse>('/auth/my-token', {
             username: credentials.username,
-            emoji_password: credentials.emojiPassword.join(''), // Send as string
+            class_code: credentials.classCode,
         });
 
         // Store token if login successful
-        if (response.success && response.token) {
-            localStorage.setItem('auth_token', response.token);
+        if (response.access_token) {
+            localStorage.setItem(TOKEN_KEY, response.access_token);
+            return { success: true, token: response.access_token };
         }
 
-        return response;
+        return { success: false, error: 'Prijava nije uspjela' };
     } catch (error) {
         if (error instanceof ApiError) {
             return {
                 success: false,
-                error: error.message,
+                error: error.status === 401
+                    ? 'Pogrešno ime ili šifra razreda'
+                    : error.message,
             };
         }
         return {
@@ -41,27 +47,31 @@ export async function loginStudent(
 
 /**
  * Login as a teacher with text password
+ * Calls /auth/my-token with username and password
  */
 export async function loginTeacher(
     credentials: TeacherLoginRequest
-): Promise<AuthResponse> {
+): Promise<{ success: boolean; token?: string; error?: string }> {
     try {
-        const response = await api.post<AuthResponse>('/api/auth/teacher/login', {
+        const response = await api.post<TokenResponse>('/auth/my-token', {
             username: credentials.username,
             password: credentials.password,
         });
 
         // Store token if login successful
-        if (response.success && response.token) {
-            localStorage.setItem('auth_token', response.token);
+        if (response.access_token) {
+            localStorage.setItem(TOKEN_KEY, response.access_token);
+            return { success: true, token: response.access_token };
         }
 
-        return response;
+        return { success: false, error: 'Prijava nije uspjela' };
     } catch (error) {
         if (error instanceof ApiError) {
             return {
                 success: false,
-                error: error.message,
+                error: error.status === 401
+                    ? 'Pogrešno korisničko ime ili lozinka'
+                    : error.message,
             };
         }
         return {
@@ -72,25 +82,37 @@ export async function loginTeacher(
 }
 
 /**
- * Logout - clear stored credentials
+ * Get current user info
  */
-export function logout(): void {
-    localStorage.removeItem('auth_token');
-}
-
-/**
- * Check if user is authenticated (has valid token)
- */
-export async function checkAuth(): Promise<AuthResponse> {
+export async function getCurrentUser(): Promise<MeResponse | null> {
     try {
-        const response = await api.get<AuthResponse>('/api/auth/me');
+        const response = await api.get<MeResponse>('/auth/me');
         return response;
     } catch (error) {
-        logout(); // Clear invalid token
-        return {
-            success: false,
-            error: 'Sesija je istekla',
-        };
+        // If token is invalid, clear it
+        logout();
+        return null;
     }
 }
 
+/**
+ * Logout - clear stored credentials
+ */
+export function logout(): void {
+    localStorage.removeItem(TOKEN_KEY);
+}
+
+/**
+ * Get stored token
+ */
+export function getToken(): string | null {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem(TOKEN_KEY);
+}
+
+/**
+ * Check if user has a stored token
+ */
+export function hasToken(): boolean {
+    return !!getToken();
+}
