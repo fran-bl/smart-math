@@ -13,7 +13,8 @@ db_dependency = Annotated[Session, Depends(get_db)]
 
 class CreateClassroomRequest(BaseModel):
     class_code: str
-    #TODO: dodati classroom name
+    classroom_name: str
+    
 
 
 @router.post("/create", summary="Create new classroom")
@@ -28,9 +29,9 @@ def create_new_classroom(request: CreateClassroomRequest,
         raise HTTPException(status_code=400, detail="Classroom with that class_code already exists.")
 
     new_classroom = Classroom(
-        class_code=request.class_code
-        #TODO: dodati classroom_name kad ga stavimo u bazu
-        #TODO: dodati vezu na current usera tako da classroom ima direktnu vezu na nastavnika
+        class_code=request.class_code,
+        classroom_name = request.classroom_name,
+        teacher_id = current_user.id
     )
 
     db.add(new_classroom)
