@@ -47,7 +47,7 @@ def main(args):
     # 3) Pipeline: scaler + logistic regression
     pipe = Pipeline([
         ('scaler', StandardScaler()),
-        ('clf', LogisticRegression(multi_class='multinomial', solver='lbfgs', max_iter=1000, class_weight='balanced'))
+        ('clf', LogisticRegression(solver='lbfgs', max_iter=1000, class_weight='balanced'))
     ])
 
     # 4) Grid search for C (regularization strength) - mogla bih samo staviti na C = 1.0
