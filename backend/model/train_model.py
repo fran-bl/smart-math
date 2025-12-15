@@ -7,7 +7,7 @@ from pathlib import Path
 from sklearn.model_selection import train_test_split, StratifiedKFold, GridSearchCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import SGDClassifier
 from sklearn.metrics import (
     classification_report,
     confusion_matrix,
@@ -16,9 +16,12 @@ from sklearn.metrics import (
     balanced_accuracy_score
 )
 
+FEATURES = ['accuracy', 'avg_time', 'hints_used']
+CLASSES = [0, 1, 2]
+
 def load_data(csv_path):
     df = pd.read_csv(csv_path)
-    X = df[['accuracy', 'avg_time', 'hints_used']].copy()
+    X = df[FEATURES].copy()
     y = df['label'].astype(int)
     return X, y, df
 
@@ -33,8 +36,8 @@ def main(args):
     eda = {
         "n_samples": int(len(raw_df)),
         "class_counts": raw_df['label'].value_counts().to_dict(),
-        "feature_means": raw_df[['accuracy','avg_time','hints_used']].mean().to_dict(),
-        "feature_std": raw_df[['accuracy','avg_time','hints_used']].std().to_dict()
+        "feature_means": raw_df[FEATURES].mean().to_dict(),
+        "feature_std": raw_df[FEATURES].std().to_dict()
     }
     with open(out_dir / "eda.json", "w") as f:
         json.dump(eda, f, indent=2)
@@ -44,31 +47,30 @@ def main(args):
         X, y, test_size=args.test_size, random_state=args.seed, stratify=y
     )
 
-    # 3) Pipeline: scaler + logistic regression
-    pipe = Pipeline([
-        ('scaler', StandardScaler()),
-        ('clf', LogisticRegression(solver='lbfgs', max_iter=1000, class_weight='balanced'))
-    ])
+    # 3) Scaling
+    scaler = StandardScaler()
+    scaler.partial_fit(X_train)
+    X_train_scaled = scaler.transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
 
-    # 4) Grid search for C (regularization strength) - mogla bih samo staviti na C = 1.0
-    param_grid = {
-        'clf__C': [0.01, 0.1, 1.0, 5.0, 10.0],
-        'clf__penalty': ['l2']
-    }
+    # 4) mlr with SGD
+    model = SGDClassifier(
+        loss='log_loss',
+        penalty='l2',
+        alpha=0.0001,
+        learning_rate='invscaling',
+        eta0=0.01,
+        power_t=0.25,
+        max_iter=1,
+        tol=None,
+        random_state=args.seed
+    )
 
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=args.seed)
-    grid = GridSearchCV(pipe, param_grid, cv=cv, scoring='f1_macro', n_jobs=-1, verbose=1)
-    grid.fit(X_train, y_train)
+    model.partial_fit(X_train_scaled, y_train, classes=CLASSES)
 
-    # Save CV results and best params
-    pd.DataFrame(grid.cv_results_).to_csv(out_dir / "cv_results.csv", index=False)
-    with open(out_dir / "best_params.json", "w") as f:
-        json.dump(grid.best_params_, f, indent=2)
-
-    # 5) Evaluate on test set
-    best_model = grid.best_estimator_
-    y_pred = best_model.predict(X_test)
-    y_proba = best_model.predict_proba(X_test)
+    # 5) Evaluation
+    y_pred = model.predict(X_test_scaled)
+    y_proba = model.predict_proba(X_test_scaled)
 
     report = classification_report(y_test, y_pred, output_dict=True)
     conf = confusion_matrix(y_test, y_pred).tolist()
@@ -97,16 +99,11 @@ def main(args):
     test_out.to_csv(out_dir / "test_predictions.csv", index=False)
 
     # 6) Save model + scaler
-    joblib.dump(best_model, out_dir / "mlr_model.pkl")
-    print("Saved model to:", out_dir / "mlr_model.pkl")
+    joblib.dump(model, out_dir / "model.pkl")
+    joblib.dump(scaler, out_dir / "scaler.pkl")
 
-    # 7) Inspect coefficients (after scaler, classifier is inside pipeline)
-    clf = best_model.named_steps['clf']
-    scaler = best_model.named_steps['scaler']
-    coef = clf.coef_  # shape (n_classes, n_features)
-    features = ['accuracy','avg_time','hints_used']
-    coef_df = pd.DataFrame(coef, columns=features)
-    coef_df['class'] = range(coef_df.shape[0])
+    coef_df = pd.DataFrame(model.coef_, columns=FEATURES)
+    coef_df['class'] = CLASSES
     coef_df.to_csv(out_dir / "model_coefficients.csv", index=False)
 
     print("Training complete. Metrics saved to", out_dir)

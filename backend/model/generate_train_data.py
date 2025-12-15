@@ -4,16 +4,18 @@ import argparse
 import random
 
 def heuristic(acc, avg_time, hints):
-    if acc > 0.85 and avg_time < 6 and hints <= 1: return 2
-    if acc < 0.45 or hints >= 4 or avg_time > 12: return 0
-    return 1
+    if acc >= 0.9 and avg_time <= 5 and hints <= 1: return 2
+    if 0.6 <= acc <= 0.75 and 7 <= avg_time <= 10 and 2 <= hints <= 3: return 1
+    if acc <= 0.4 and avg_time >= 13 and hints >= 4: return 0
+    elif acc < 0.4 and avg_time < 6 and hints <= 1: return 1
+    else: return None
 
-def generate(n=5000, seed=42, noise_prob=0.05, balance=False):
+def generate(n=5000, seed=42, balance=False):
     np.random.seed(seed)
     random.seed(seed)
 
     rows = []
-    for _ in range(n):
+    while len(rows) < n:
         # Tocnost sampleana iz beta distribucije
         acc = np.clip(np.random.beta(a=2.0, b=2.0), 0.0, 1.0)
 
@@ -27,11 +29,7 @@ def generate(n=5000, seed=42, noise_prob=0.05, balance=False):
 
         label = heuristic(acc, avg_time, hints)
 
-        # Dodamo noise u label
-        if np.random.rand() < noise_prob:
-            other = [0, 1, 2]
-            other.remove(label)
-            label = random.choice(other)
+        if label is None: continue
 
         rows.append({
             'accuracy': float(acc),
@@ -64,11 +62,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--n', type=int, default=5000)
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--noise', type=float, default=0.05)
     parser.add_argument('--balance', action='store_true')
     args = parser.parse_args()
 
-    df = generate(n=args.n, seed=args.seed, noise_prob=args.noise, balance=args.balance)
+    df = generate(n=args.n, seed=args.seed, balance=args.balance)
     df.to_csv('train_dataset.csv', index=False)
 
     print(df['label'].value_counts(normalize=False))

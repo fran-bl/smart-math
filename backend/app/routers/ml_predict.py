@@ -1,8 +1,8 @@
-import joblib
-from pathlib import Path as FilePath
 from fastapi import APIRouter
 from pydantic import BaseModel
 import pandas as pd
+
+from app.services.model_state import model, scaler
 
 
 class DifficultyRequest(BaseModel):
@@ -13,12 +13,6 @@ class DifficultyRequest(BaseModel):
 class DifficultyResponse(BaseModel):
     label: int
     probabilities: dict
-
-# path do istreniranog modela
-MODEL_PATH = FilePath(__file__).resolve().parents[2] / "model" / "model_output" / "mlr_model.pkl"
-
-print("Path modela je:", MODEL_PATH)
-model = joblib.load(MODEL_PATH)
 
 router = APIRouter()
 
@@ -32,15 +26,14 @@ def predict_difficulty(data: DifficultyRequest):
         "hints_used": data.hints_used
     }])
 
+    # skaliranje
+    X_scaled = scaler.transform(X)
+
     # predikcija
-    label = int(model.predict(X)[0])
+    label = int(model.predict(X_scaled)[0])
 
     # vjerojatnosti svake labele
-    proba = model.predict_proba(X)[0]
-    prob_dict = {
-        0: float(proba[0]),
-        1: float(proba[1]),
-        2: float(proba[2])
-    }
+    proba = model.predict_proba(X_scaled)[0]
+    prob_dict = {int(c): float(p) for c, p in zip(model.classes_, proba)}
 
     return DifficultyResponse(label=label, probabilities=prob_dict)
