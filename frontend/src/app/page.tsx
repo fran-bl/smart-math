@@ -131,14 +131,14 @@ export default function LoginPage() {
     }
 
     return (
-        <main className="min-h-screen flex items-center justify-center p-6 relative overflow-hidden">
+        <main className="min-h-screen flex items-center justify-center p-6 py-12 relative overflow-auto">
             {/* Background decoration */}
             <div className="absolute inset-0 overflow-hidden pointer-events-none">
                 <div className="absolute -top-20 -left-20 w-72 h-72 bg-indigo-500/10 rounded-full blur-3xl" />
                 <div className="absolute -bottom-20 -right-20 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl" />
             </div>
 
-            <div className="card p-8 sm:p-10 max-w-md w-full relative z-10">
+            <div className="card p-8 sm:p-10 max-w-md w-full relative z-10 my-auto">
                 {/* Logo/Title */}
                 <div className="text-center mb-8">
                     <div className="text-6xl mb-3">🧮</div>
@@ -284,7 +284,7 @@ export default function LoginPage() {
                 </button>
 
                 {/* Teacher Mode toggle */}
-                <div className="absolute -bottom-16 right-0 left-0 flex items-center justify-between">
+                <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between">
                     <button
                         onClick={() => setShowRegister(true)}
                         className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
