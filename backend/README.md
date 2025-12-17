@@ -30,7 +30,7 @@ Ovo je FastAPI backend za SmartMath projekt. Backend se spaja na Supabase bazu (
 4. BITNO! Prije pokretanja servera:
     generiraj dataset i treniraj model -
         cd model
-        python generate_train_data.py --n 10000
+        python generate_train_data.py --balance
         python train_model.py
     vrati se u backend direktorij - 
         cd ..
