@@ -1,10 +1,11 @@
+import uuid
 
-from xmlrpc.client import Boolean
-from sqlalchemy import Column, ForeignKey, TIMESTAMP, Boolean, Text
+from sqlalchemy import TIMESTAMP, Boolean, Column, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
-import uuid
+
 from ..db import Base
+
 
 class GamePlayers(Base):
     __tablename__ = "game_players"
@@ -17,6 +18,4 @@ class GamePlayers(Base):
     socket_id = Column(Text, nullable=True)
 
     is_active = Column(Boolean, default=True)
-
-    joined_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     left_at = Column(TIMESTAMP(timezone=True))

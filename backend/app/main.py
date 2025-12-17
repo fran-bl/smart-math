@@ -10,15 +10,15 @@ from .routers.topics_router import router as topics_router
 
 sio = socketio.AsyncServer(
     async_mode="asgi",
-    cors_allowed_origins="*",
+    cors_allowed_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
 )
 
+fastapi_app = FastAPI(title="SmartMath API", version="0.1.0")
 
-app = FastAPI(title="SmartMath API", version="0.1.0")
-socket_app = socketio.ASGIApp(sio)
-app.mount("/ws", socket_app)
-
-app.add_middleware(
+fastapi_app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
@@ -26,26 +26,30 @@ app.add_middleware(
     ],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
+app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app)
+
 # Routeri
-app.include_router(health.router, prefix="/health", tags=["health"])
-app.include_router(test_db.router, prefix="/test", tags=["test"])
-app.include_router(
+fastapi_app.include_router(health.router, prefix="/health", tags=["health"])
+fastapi_app.include_router(test_db.router, prefix="/test", tags=["test"])
+fastapi_app.include_router(
     ml_predict.router, prefix="/difficulty", tags=["ML Model - predict difficulty"]
 )
-app.include_router(
+fastapi_app.include_router(
     ml_feedback.router,
     prefix="/difficulty",
     tags=["ML Model - get feedback and update model"],
 )
-app.include_router(auth)
-app.include_router(classroom_router)
-app.include_router(game_router)
-app.include_router(topics_router)
+fastapi_app.include_router(auth)
+fastapi_app.include_router(classroom_router)
+fastapi_app.include_router(game_router)
+fastapi_app.include_router(topics_router)
 
 
-@app.get("/")
+@fastapi_app.get("/")
 def root():
     return "Backend is running!"
+
+from .routers import socket_events  # noqa: E402, F401

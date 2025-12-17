@@ -1,29 +1,17 @@
-from jose import jwt, JWTError
+from jose import JWTError, jwt
+
+from ..config import settings
 from ..db import SessionLocal
 from ..models.users import User
-from ..config import settings
 
 
-async def authenticate_socket(environ):
-    token = None
-
-    # Socket.IO auth payload
-    scope = environ.get("asgi.scope")
-    if scope:
-        auth = scope.get("auth")
-        if auth:
-            token = auth.get("token")
-
-    # Fallback: Authorization header
-    if not token:
-        token = environ.get("HTTP_AUTHORIZATION")
-
+async def authenticate_socket_with_token(token: str):
+    """Authenticate socket connection using JWT token."""
     if not token:
         return None
-
+    token = token.strip()
     if token.startswith("Bearer "):
-        token = token[7:]
-
+        token = token[7:].strip()
 
     try:
         payload = jwt.decode(
@@ -39,4 +27,3 @@ async def authenticate_socket(environ):
 
     db = SessionLocal()
     return db.query(User).filter(User.id == user_id).first()
-

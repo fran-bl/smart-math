@@ -3,7 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 
-import { AddStudentsModal, CreateClassroomModal, CreateGameModal, Spinner } from '@/components';
+import { AddStudentsModal, CreateClassroomModal, CreateGameModal, GameLobbyModal, Spinner } from '@/components';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import { passwordToEmojis } from '@/lib/utils';
@@ -22,6 +22,8 @@ export default function TeacherDashboard() {
     const [showCreateClassroom, setShowCreateClassroom] = useState(false);
     const [showAddStudents, setShowAddStudents] = useState(false);
     const [showCreateGame, setShowCreateGame] = useState(false);
+    const [showGameLobby, setShowGameLobby] = useState(false);
+    const [currentGame, setCurrentGame] = useState<{ gameId: string; gameCode: string } | null>(null);
     const [classrooms, setClassrooms] = useState<Classroom[]>([]);
     const [selectedClassroom, setSelectedClassroom] = useState<Classroom | null>(null);
     const [isLoadingClassrooms, setIsLoadingClassrooms] = useState(true);
@@ -257,12 +259,26 @@ export default function TeacherDashboard() {
             <CreateGameModal
                 isOpen={showCreateGame}
                 onClose={() => setShowCreateGame(false)}
-                onTopicSelected={(topic) => {
-                    console.log('Selected topic:', topic);
-                    // TODO: Implementirati pokretanje igre
+                onGameCreated={(data) => {
+                    console.log('Game created:', data);
+                    setCurrentGame({ gameId: data.gameId, gameCode: data.gameCode });
+                    setShowGameLobby(true);
                 }}
                 classroomId={selectedClassroom?.id}
             />
+
+            {/* Game Lobby Modal */}
+            {currentGame && (
+                <GameLobbyModal
+                    isOpen={showGameLobby}
+                    onClose={() => {
+                        setShowGameLobby(false);
+                        setCurrentGame(null);
+                    }}
+                    gameId={currentGame.gameId}
+                    gameCode={currentGame.gameCode}
+                />
+            )}
         </main>
     );
 }

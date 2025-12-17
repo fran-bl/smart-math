@@ -5,5 +5,7 @@ export * from './ui';
 export { AddStudentsModal } from './AddStudentsModal';
 export { CreateClassroomModal } from './CreateClassroomModal';
 export { CreateGameModal } from './CreateGameModal';
+export { GameLobbyModal } from './GameLobbyModal';
+export { JoinGameModal } from './JoinGameModal';
 export { RegisterModal } from './RegisterModal';
 

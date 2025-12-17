@@ -14,6 +14,7 @@ interface AuthState {
     // State
     user: User | null;
     isAuthenticated: boolean;
+    token: string | null;
     isLoading: boolean;
     isHydrated: boolean;
     error: string | null;
@@ -35,6 +36,7 @@ export const useAuthStore = create<AuthState>()(
             // Initial state
             user: null,
             isAuthenticated: false,
+            token: null,
             isLoading: false,
             isHydrated: false,
             error: null,
@@ -48,7 +50,7 @@ export const useAuthStore = create<AuthState>()(
             checkAuth: async () => {
                 const token = getToken();
                 if (!token) {
-                    set({ user: null, isAuthenticated: false });
+                    set({ user: null, isAuthenticated: false, token: null });
                     return false;
                 }
 
@@ -62,11 +64,12 @@ export const useAuthStore = create<AuthState>()(
                                 role: userInfo.role,
                             },
                             isAuthenticated: true,
+                            token,
                         });
                         return true;
                     }
                 } catch {
-                    set({ user: null, isAuthenticated: false });
+                    set({ user: null, isAuthenticated: false, token });
                 }
                 return false;
             },
@@ -90,11 +93,21 @@ export const useAuthStore = create<AuthState>()(
                                     role: userInfo.role,
                                 },
                                 isAuthenticated: true,
+                                token: response.token,
                                 isLoading: false,
                                 error: null,
                             });
                             return true;
                         }
+
+                        // Keep token, but surface a clear error if /me failed
+                        set({
+                            isAuthenticated: false,
+                            token: response.token,
+                            isLoading: false,
+                            error: 'Prijava je uspjela, ali nije moguće dohvatiti profil (/auth/me)',
+                        });
+                        return false;
                     }
 
                     set({
@@ -130,11 +143,20 @@ export const useAuthStore = create<AuthState>()(
                                     role: userInfo.role,
                                 },
                                 isAuthenticated: true,
+                                token: response.token,
                                 isLoading: false,
                                 error: null,
                             });
                             return true;
                         }
+
+                        set({
+                            isAuthenticated: false,
+                            token: response.token,
+                            isLoading: false,
+                            error: 'Prijava je uspjela, ali nije moguće dohvatiti profil (/auth/me)',
+                        });
+                        return false;
                     }
 
                     set({
@@ -183,6 +205,7 @@ export const useAuthStore = create<AuthState>()(
                 set({
                     user: null,
                     isAuthenticated: false,
+                    token: null,
                     error: null,
                 });
             },
@@ -203,6 +226,7 @@ export const useAuthStore = create<AuthState>()(
                 // Only persist user data, not loading/error states
                 user: state.user,
                 isAuthenticated: state.isAuthenticated,
+                token: state.token,
             }),
             onRehydrateStorage: () => (state) => {
                 state?.setHydrated();

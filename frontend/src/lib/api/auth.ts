@@ -127,8 +127,10 @@ export async function getCurrentUser(): Promise<MeResponse | null> {
         const response = await api.get<MeResponse>('/auth/me');
         return response;
     } catch (error) {
-        // If token is invalid, clear it
-        logout();
+        // Only clear token if backend explicitly rejects it
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+            logout();
+        }
         return null;
     }
 }

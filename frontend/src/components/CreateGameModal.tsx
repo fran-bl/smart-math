@@ -9,16 +9,23 @@ interface Topic {
     name: string;
 }
 
+interface GameCreatedData {
+    gameId: string;
+    gameCode: string;
+    topic: Topic;
+}
+
 interface CreateGameModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onTopicSelected?: (topic: Topic) => void;
+    onGameCreated?: (data: GameCreatedData) => void;
     classroomId?: string;
 }
 
-export function CreateGameModal({ isOpen, onClose, onTopicSelected, classroomId }: CreateGameModalProps) {
+export function CreateGameModal({ isOpen, onClose, onGameCreated, classroomId }: CreateGameModalProps) {
     const [topics, setTopics] = useState<Topic[]>([]);
     const [isLoading, setIsLoading] = useState(true);
+    const [isCreating, setIsCreating] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [selectedTopic, setSelectedTopic] = useState<Topic | null>(null);
 
@@ -56,11 +63,41 @@ export function CreateGameModal({ isOpen, onClose, onTopicSelected, classroomId 
         setSelectedTopic(topic);
     };
 
-    const handleConfirm = () => {
-        if (selectedTopic && onTopicSelected) {
-            onTopicSelected(selectedTopic);
+    const handleConfirm = async () => {
+        if (!selectedTopic) return;
+
+        const token =
+            typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+        if (!token) {
+            setError('Niste prijavljeni');
+            return;
         }
-        handleClose();
+
+        setIsCreating(true);
+        setError(null);
+
+        try {
+            const response = await api.post<{ game_id: string; game_code: string }>(
+                '/game/create-multiplayer-game'
+            );
+
+            if (onGameCreated) {
+                onGameCreated({
+                    gameId: response.game_id,
+                    gameCode: response.game_code,
+                    topic: selectedTopic,
+                });
+            }
+            handleClose();
+        } catch (err) {
+            if (err instanceof ApiError) {
+                setError(err.message);
+            } else {
+                setError('Nije moguće kreirati igru');
+            }
+        } finally {
+            setIsCreating(false);
+        }
     };
 
     if (!isOpen) return null;
@@ -121,10 +158,19 @@ export function CreateGameModal({ isOpen, onClose, onTopicSelected, classroomId 
                         {/* Confirm button */}
                         <button
                             onClick={handleConfirm}
-                            disabled={!selectedTopic}
+                            disabled={!selectedTopic || isCreating}
                             className="btn btn-primary w-full py-3 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                            {selectedTopic ? `Pokreni igru: ${selectedTopic.name}` : 'Odaberi temu'}
+                            {isCreating ? (
+                                <span className="flex items-center justify-center gap-2">
+                                    <Spinner />
+                                    Kreiranje igre...
+                                </span>
+                            ) : selectedTopic ? (
+                                `Pokreni igru: ${selectedTopic.name}`
+                            ) : (
+                                'Odaberi temu'
+                            )}
                         </button>
                     </>
                 )}

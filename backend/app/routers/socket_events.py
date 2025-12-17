@@ -1,34 +1,46 @@
 import datetime
-from ..models.game_players import GamePlayers
-from ..models.users import User
-from .socket_auth import authenticate_socket
+
+from app.main import sio
+
 from ..db import SessionLocal
 from ..models.game import Game
-from app.main import sio
+from ..models.game_players import GamePlayers
+from ..models.users import User
+from .socket_auth import authenticate_socket_with_token
 
 
 @sio.event
-async def connect(sid, environ):
-    token = environ.get("HTTP_AUTHORIZATION")
+async def connect(sid, environ, auth):
+    token = None
 
+    # Get token from auth payload (Socket.IO client auth option)
+    if auth and isinstance(auth, dict):
+        token = auth.get("token")
+
+    # Fallback: Authorization header
     if not token:
-        return False  
+        token = environ.get("HTTP_AUTHORIZATION")
+        # `authenticate_socket_with_token` will normalize Bearer prefix if present
 
-    user = await authenticate_socket(environ)
+    if not token or not str(token).strip():
+        return False
+
+    user = await authenticate_socket_with_token(str(token).strip())
 
     if not user:
-        return False 
+        return False
 
     # Attach user to socket session
-    await sio.save_session(sid, {
-        "user_id": str(user.id),
-        "role": user.role,
-        "username": user.username,
-    })
+    await sio.save_session(
+        sid,
+        {
+            "user_id": str(user.id),
+            "role": user.role,
+            "username": user.username,
+        },
+    )
 
     print("Socket connected:", user.username)
-
-
 
 
 @sio.event
@@ -41,11 +53,15 @@ async def teacherJoin(sid, data):
 
     db = SessionLocal()
 
-    game = db.query(Game).filter(
-        Game.id == data["game_id"],
-        Game.teacher_id == session["user_id"],
-        Game.status == "lobby"
-    ).first()
+    game = (
+        db.query(Game)
+        .filter(
+            Game.id == data["game_id"],
+            Game.teacher_id == session["user_id"],
+            Game.status == "lobby",
+        )
+        .first()
+    )
 
     if not game:
         await sio.emit("error", {"message": "Invalid game"}, to=sid)
@@ -55,57 +71,60 @@ async def teacherJoin(sid, data):
     await emit_players(game.id)
 
 
-#student join
+# student join
 @sio.event
 async def joinGame(sid, data):
-
     session = await sio.get_session(sid)
-
 
     if session["role"] != "student":
         await sio.emit("error", {"message": "Students only"}, to=sid)
         return
-    
+
     db = SessionLocal()
 
-    game = db.query(Game).filter(
-        Game.game_code == data["game_code"],
-        Game.status == "lobby"
-    ).first()
+    game = (
+        db.query(Game)
+        .filter(Game.game_code == data["game_code"], Game.status == "lobby")
+        .first()
+    )
 
     if not game:
         await sio.emit("error", {"message": "Game not found"}, to=sid)
         return
 
-
     user_id = session["user_id"]
 
-    user = db.query(User).filter(
-        User.id == user_id,
-        User.role == "student"
-    ).first()
+    user = db.query(User).filter(User.id == user_id, User.role == "student").first()
 
     if not user:
         await sio.emit("error", {"message": "User not found"}, to=sid)
         return
 
-    player = db.query(GamePlayers).filter_by(
-        game_id=game.id,
-        user_id=user.id
-    ).first()
+    player = db.query(GamePlayers).filter_by(game_id=game.id, user_id=user.id).first()
 
     if player:
         player.socket_id = sid
         player.is_active = True
         player.left_at = None
     else:
-        db.add(GamePlayers(
-            game_id=game.id,
-            user_id=user.id,
-            socket_id=sid,
-        ))
+        db.add(
+            GamePlayers(
+                game_id=game.id,
+                user_id=user.id,
+                socket_id=sid,
+            )
+        )
 
     db.commit()
+
+    # Store game_id on the socket session so we can cleanly handle disconnects
+    await sio.save_session(
+        sid,
+        {
+            **session,
+            "game_id": str(game.id),
+        },
+    )
 
     await sio.enter_room(sid, str(game.id))
     await emit_players(game.id)
@@ -117,10 +136,7 @@ async def emit_players(game_id):
     players = (
         db.query(User.username)
         .join(GamePlayers, GamePlayers.user_id == User.id)
-        .filter(
-            GamePlayers.game_id == game_id,
-            GamePlayers.is_active == True
-        )
+        .filter(GamePlayers.game_id == game_id, GamePlayers.is_active.is_(True))
         .all()
     )
 
@@ -135,16 +151,39 @@ async def emit_players(game_id):
 async def disconnect(sid):
     db = SessionLocal()
 
-    player = db.query(GamePlayers).filter(
-        GamePlayers.socket_id == sid,
-        GamePlayers.is_active == True
-    ).first()
+    # Prefer DB lookup by socket_id; fallback to session if needed
+    player = (
+        db.query(GamePlayers)
+        .filter(GamePlayers.socket_id == sid, GamePlayers.is_active.is_(True))
+        .first()
+    )
+
+    if not player:
+        try:
+            session = await sio.get_session(sid)
+        except Exception:
+            return
+
+        user_id = session.get("user_id") if session else None
+        game_id = session.get("game_id") if session else None
+        if not user_id or not game_id:
+            return
+
+        player = (
+            db.query(GamePlayers)
+            .filter(
+                GamePlayers.user_id == user_id,
+                GamePlayers.game_id == game_id,
+                GamePlayers.is_active.is_(True),
+            )
+            .first()
+        )
 
     if not player:
         return
 
     player.is_active = False
-    player.left_at = datetime.utcnow()
+    player.left_at = datetime.datetime.utcnow()
     db.commit()
 
     await emit_players(player.game_id)
@@ -153,4 +192,3 @@ async def disconnect(sid):
 async def get_socket_user(sid):
     session = await sio.get_session(sid)
     return session
-

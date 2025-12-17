@@ -1,14 +1,15 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
-import { Spinner } from '@/components';
+import { JoinGameModal, Spinner } from '@/components';
 import { useAuthStore } from '@/lib/store';
 
 export default function StudentDashboard() {
     const router = useRouter();
     const { user, isAuthenticated, isHydrated, logout } = useAuthStore();
+    const [showJoinGame, setShowJoinGame] = useState(false);
 
     // Redirect to login if not authenticated
     useEffect(() => {
@@ -73,12 +74,20 @@ export default function StudentDashboard() {
                     </p>
                 </div>
 
-                <button className="btn btn-primary text-xl px-10 py-4 flex items-center gap-3">
-                <i className="fa-solid fa-gamepad text-2xl" />
-                Započni igru
+                <button
+                    onClick={() => setShowJoinGame(true)}
+                    className="btn btn-primary text-xl px-10 py-4 flex items-center gap-3"
+                >
+                    <i className="fa-solid fa-gamepad text-2xl" />
+                    Započni igru
                 </button>
 
             </div>
+
+            <JoinGameModal
+                isOpen={showJoinGame}
+                onClose={() => setShowJoinGame(false)}
+            />
         </main>
     );
 }
