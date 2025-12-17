@@ -3,7 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 
-import { AddStudentsModal, CreateClassroomModal, Spinner } from '@/components';
+import { AddStudentsModal, CreateClassroomModal, CreateGameModal, Spinner } from '@/components';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import { passwordToEmojis } from '@/lib/utils';
@@ -21,6 +21,7 @@ export default function TeacherDashboard() {
 
     const [showCreateClassroom, setShowCreateClassroom] = useState(false);
     const [showAddStudents, setShowAddStudents] = useState(false);
+    const [showCreateGame, setShowCreateGame] = useState(false);
     const [classrooms, setClassrooms] = useState<Classroom[]>([]);
     const [selectedClassroom, setSelectedClassroom] = useState<Classroom | null>(null);
     const [isLoadingClassrooms, setIsLoadingClassrooms] = useState(true);
@@ -130,7 +131,7 @@ export default function TeacherDashboard() {
                             className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-50 transition-colors"
                             title="Osvježi"
                         >
-                            <i className={`fa-solid fa-arrows-rotate text-xl text-blue-500 ${isLoadingClassrooms ? "animate-spin" : ""}`}/>
+                            <i className={`fa-solid fa-arrows-rotate text-xl text-blue-500 ${isLoadingClassrooms ? "animate-spin" : ""}`} />
 
                         </button>
                     </div>
@@ -216,6 +217,19 @@ export default function TeacherDashboard() {
                         </div>
                     ) : null}
                 </div>
+
+                {/* Create Game Button */}
+                {selectedClassroom && (
+                    <div className="mt-8 flex justify-center">
+                        <button
+                            onClick={() => setShowCreateGame(true)}
+                            className="btn btn-primary flex items-center gap-3 !py-4 !px-8 text-lg shadow-lg hover:shadow-xl transition-shadow"
+                        >
+                            <i className="fa-solid fa-gamepad text-2xl" />
+                            <span>Pokreni novu igru</span>
+                        </button>
+                    </div>
+                )}
             </div>
 
             {/* Create Classroom Modal */}
@@ -238,6 +252,17 @@ export default function TeacherDashboard() {
                     classroomName={selectedClassroom.class_name}
                 />
             )}
+
+            {/* Create Game Modal */}
+            <CreateGameModal
+                isOpen={showCreateGame}
+                onClose={() => setShowCreateGame(false)}
+                onTopicSelected={(topic) => {
+                    console.log('Selected topic:', topic);
+                    // TODO: Implementirati pokretanje igre
+                }}
+                classroomId={selectedClassroom?.id}
+            />
         </main>
     );
 }
