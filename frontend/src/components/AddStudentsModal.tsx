@@ -1,7 +1,7 @@
 'use client';
 
 import { api, ApiError } from '@/lib/api';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Spinner } from './ui';
 
 interface AddStudentsModalProps {
@@ -11,15 +11,50 @@ interface AddStudentsModalProps {
     classroomName: string;
 }
 
+interface UnassignedStudent {
+    id: string;
+    username: string;
+}
+
 export function AddStudentsModal({ isOpen, onClose, onSuccess, classroomName }: AddStudentsModalProps) {
-    const [studentNames, setStudentNames] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const [isLoadingStudents, setIsLoadingStudents] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState(false);
     const [addedCount, setAddedCount] = useState(0);
 
+    const [availableStudents, setAvailableStudents] = useState<UnassignedStudent[]>([]);
+    const [selectedUsernames, setSelectedUsernames] = useState<string[]>([]);
+
+    const selectedSet = useMemo(() => new Set(selectedUsernames), [selectedUsernames]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+
+        const fetchUnassigned = async () => {
+            setIsLoadingStudents(true);
+            setError(null);
+            try {
+                const data = await api.get<UnassignedStudent[]>('/classroom/unassigned-students');
+                setAvailableStudents(data);
+                setSelectedUsernames([]);
+            } catch (err) {
+                if (err instanceof ApiError) {
+                    setError(err.message);
+                } else {
+                    setError('Nije moguće učitati učenike');
+                }
+            } finally {
+                setIsLoadingStudents(false);
+            }
+        };
+
+        fetchUnassigned();
+    }, [isOpen]);
+
     const handleClose = () => {
-        setStudentNames('');
+        setAvailableStudents([]);
+        setSelectedUsernames([]);
         setError(null);
         setSuccess(false);
         setAddedCount(0);
@@ -29,13 +64,8 @@ export function AddStudentsModal({ isOpen, onClose, onSuccess, classroomName }: 
     const handleSubmit = async () => {
         setError(null);
 
-        const names = studentNames
-            .split('\n')
-            .map(name => name.trim())
-            .filter(name => name.length > 0);
-
-        if (names.length === 0) {
-            setError('Molimo unesite barem jednog učenika');
+        if (selectedUsernames.length === 0) {
+            setError('Molimo odaberite barem jednog učenika');
             return;
         }
 
@@ -44,12 +74,12 @@ export function AddStudentsModal({ isOpen, onClose, onSuccess, classroomName }: 
         try {
             await api.post('/classroom/add-students', {
                 classroom_name: classroomName,
-                student_list: names,
+                student_list: selectedUsernames,
             });
 
-            setAddedCount(names.length);
+            setAddedCount(selectedUsernames.length);
             setSuccess(true);
-            setStudentNames('');
+            setSelectedUsernames([]);
 
             setTimeout(() => {
                 handleClose();
@@ -64,6 +94,14 @@ export function AddStudentsModal({ isOpen, onClose, onSuccess, classroomName }: 
         } finally {
             setIsLoading(false);
         }
+    };
+
+    const toggleSelected = (username: string) => {
+        setSelectedUsernames(prev => (
+            prev.includes(username)
+                ? prev.filter(u => u !== username)
+                : [...prev, username]
+        ));
     };
 
     if (!isOpen) return null;
@@ -102,30 +140,55 @@ export function AddStudentsModal({ isOpen, onClose, onSuccess, classroomName }: 
                             </div>
                         )}
 
-                        {/* Student names textarea */}
+                        {/* Unassigned students list */}
                         <div className="mb-4">
                             <label className="block text-sm font-medium mb-2 text-gray-600 dark:text-gray-300">
-                                Imena učenika
+                                Odaberi učenike (samo oni bez razreda)
                             </label>
-                            <textarea
-                                value={studentNames}
-                                onChange={(e) => setStudentNames(e.target.value)}
-                                placeholder={"Marko\nAna\nIvan\n..."}
-                                disabled={isLoading}
-                                rows={6}
-                                className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 
-                                           bg-white dark:bg-gray-800 focus:border-indigo-500 dark:focus:border-indigo-400 
-                                           outline-none transition-colors disabled:opacity-50 resize-none"
-                            />
-                            <p className="text-xs text-gray-400 mt-1">
-                                Svako ime u novi red. Učenici moraju već biti registrirani u sustavu.
-                            </p>
+
+                            {isLoadingStudents ? (
+                                <div className="flex items-center gap-2 text-gray-500 py-3">
+                                    <Spinner />
+                                    <span>Učitavanje učenika...</span>
+                                </div>
+                            ) : availableStudents.length === 0 ? (
+                                <div className="text-sm text-gray-500 py-2">
+                                    Nema dostupnih učenika bez razreda.
+                                </div>
+                            ) : (
+                                <div className="max-h-56 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+                                    {availableStudents.map((s) => {
+                                        const checked = selectedSet.has(s.username);
+                                        return (
+                                            <label
+                                                key={s.id}
+                                                className="flex items-center gap-3 px-3 py-2 border-b last:border-b-0 border-gray-100 dark:border-gray-700 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/40"
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={checked}
+                                                    onChange={() => toggleSelected(s.username)}
+                                                    disabled={isLoading}
+                                                    className="checkbox checkbox-sm"
+                                                />
+                                                <span className="text-sm font-medium">{s.username}</span>
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                            )}
+
+                            {selectedUsernames.length > 0 && (
+                                <div className="mt-2 text-xs text-gray-400">
+                                    Odabrano: {selectedUsernames.length}
+                                </div>
+                            )}
                         </div>
 
                         {/* Submit button */}
                         <button
                             onClick={handleSubmit}
-                            disabled={isLoading}
+                            disabled={isLoading || isLoadingStudents || availableStudents.length === 0}
                             className="btn btn-primary w-full text-center py-2 disabled:opacity-70"
                         >
                             {isLoading ? (

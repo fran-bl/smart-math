@@ -3,6 +3,7 @@ from typing import Annotated, List
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -159,3 +160,30 @@ def addStudents(
     db.commit()
 
     return {"message": "Students added"}
+
+
+@router.get(
+    "/unassigned-students",
+    summary="Get all students that are not assigned to any classroom",
+)
+def get_unassigned_students(
+    db: db_dependency,
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != "teacher":
+        raise HTTPException(status_code=403, detail="Only teachers can view students.")
+
+    # Students that are not in any classroom yet
+    subq = select(user_classroom.c.user_id)
+
+    students = (
+        db.query(User)
+        .filter(
+            User.role == "student",
+            ~User.id.in_(subq),
+        )
+        .order_by(User.username.asc())
+        .all()
+    )
+
+    return [{"id": str(s.id), "username": s.username} for s in students]
