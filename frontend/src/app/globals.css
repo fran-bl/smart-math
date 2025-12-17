@@ -1,0 +1,95 @@
+@import "tailwindcss";
+
+:root {
+    --background: #fafbfc;
+    --foreground: #1a1a2e;
+    --primary: #4f46e5;
+    --primary-hover: #4338ca;
+    --secondary: #10b981;
+    --secondary-hover: #059669;
+    --card-bg: #ffffff;
+    --card-border: #e5e7eb;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --background: #0f0f1a;
+        --foreground: #f0f0f5;
+        --primary: #6366f1;
+        --primary-hover: #818cf8;
+        --secondary: #34d399;
+        --secondary-hover: #6ee7b7;
+        --card-bg: #1a1a2e;
+        --card-border: #2d2d44;
+    }
+}
+
+body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+}
+
+/* Custom button styles */
+.btn {
+    @apply px-6 py-3 rounded-xl font-semibold transition-all duration-200 transform hover:scale-105 active:scale-95;
+}
+
+.btn-primary {
+    background: var(--primary);
+    color: white;
+}
+
+.btn-primary:hover {
+    background: var(--primary-hover);
+}
+
+.btn-secondary {
+    background: var(--secondary);
+    color: white;
+}
+
+.btn-secondary:hover {
+    background: var(--secondary-hover);
+}
+
+.btn-outline {
+    @apply border-2 bg-transparent;
+    border-color: var(--card-border);
+    color: var(--foreground);
+}
+
+.btn-outline:hover {
+    background: var(--card-border);
+}
+
+.card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    @apply rounded-2xl shadow-lg;
+}
+
+/* Custom border width */
+.border-3 {
+    border-width: 3px;
+}
+
+/* Password slot animation */
+@keyframes pop {
+    0% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.15);
+    }
+
+    100% {
+        transform: scale(1.05);
+    }
+}
+
+.emoji-slot-filled {
+    animation: pop 0.2s ease-out;
+}

@@ -20,9 +20,20 @@ Ovo je FastAPI backend za SmartMath projekt. Backend se spaja na Supabase bazu (
 
 2. Instaliraj dependencye:
     pip install -r requirements.txt
+    
+    WARNING: (ovdje pazite da je verzija sckit-learna barem 1.5.2, inace baca gresku:
+    pip install scikit-learn==1.5.2)
 
 3. Dodaj .env datoteku:
     DATABASE_URL=postgresql+psycopg://postgres:lozinka@localhost:5432/postgres (priložim točnu negdje privatno)
+
+4. BITNO! Prije pokretanja servera:
+    generiraj dataset i treniraj model -
+        cd model
+        python generate_train_data.py --n 10000
+        python train_model.py
+    vrati se u backend direktorij - 
+        cd ..
 
 4. Pokreni server:
     uvicorn app.main:app --reload --port 8000

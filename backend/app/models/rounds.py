@@ -9,6 +9,7 @@ class Round(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    game_id = Column(UUID(as_uuid=True), ForeignKey("game.id", ondelete="SET NULL"))
     start_ts = Column(TIMESTAMP(timezone=True), server_default=func.now())
     end_ts = Column(TIMESTAMP(timezone=True))
     question_count = Column(SmallInteger)

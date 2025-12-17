@@ -7,5 +7,5 @@ user_classroom = Table(
     "user_classroom",
     Base.metadata,
     Column("user_id", UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
-    Column("class_id", UUID(as_uuid=True), ForeignKey("classroom.id", ondelete="CASCADE"), primary_key=True),
+    Column("class_id", UUID(as_uuid=True), ForeignKey("classrooms.id", ondelete="CASCADE"), primary_key=True),
 )
