@@ -21,9 +21,10 @@ class AddStudentsReqest(BaseModel):
 
     
 def generateClasroomCode():
-    sample_list = ['A', 'B', 'C', 'D']
-    random.shuffle(sample_list)
-    return ''.join(sample_list)
+    letters = 'ABCD'
+
+    code = ''.join(random.choice(letters) for _ in range(4))
+    return code
 
 
 @router.post("/create", summary="Create new classroom")
