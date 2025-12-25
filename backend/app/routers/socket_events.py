@@ -1,13 +1,18 @@
 import datetime
+from urllib import request
 
 from app.main import sio
 
 from ..db import SessionLocal
 from ..models.game import Game
+from ..models.users import User
 from ..models.game_players import GamePlayers
 from ..models.users import User
 from .socket_auth import authenticate_socket_with_token
+from ..db import db
+from ..models.questions import Question
 
+questions = {}
 
 @sio.event
 async def connect(sid, environ, auth):
@@ -73,7 +78,7 @@ async def teacherJoin(sid, data):
 
 # student join
 @sio.event
-async def joinGame(sid, data):
+async def handle_join_game(sid, data):
     session = await sio.get_session(sid)
 
     if session["role"] != "student":
@@ -192,3 +197,199 @@ async def disconnect(sid):
 async def get_socket_user(sid):
     session = await sio.get_session(sid)
     return session
+
+
+
+@sio.event
+async def handle_start_game(data):
+    db = SessionLocal()
+    room_id = data["room_id"]
+    topic_id = data["selectedTopic"]["topic_id"]
+
+    game = Game.query.filter_by(game_id=room_id).first()
+    if not game:
+        sio.emit("error", {"message": "Game not found"}, to=request.sid)
+        return
+
+    clients = list(sio.server.manager.rooms["/"].get(room_id, {}).keys())
+    valid_clients = clients[1:] #prva vrijednost je admin socket, to nam ne treba
+
+    if room_id not in questions:
+        questions[room_id] = {}
+
+    # Je li izabrano multiple ili single room
+    if game.room_option == "multiple" and game.players_per_room:
+        # Podijeli clients u grupe prema players_per_room
+        groups = [
+            valid_clients[i:i + game.players_per_room]
+            for i in range(0, len(valid_clients), game.players_per_room)
+        ]
+        if len(groups) > 1 and len(groups[-1]) < 2:
+            last_group = groups.pop()
+            for i, player in enumerate(last_group):
+                groups[i % len(groups)].append(player)
+
+        print(f"Adjusted Grouping Players: {groups}")
+
+        # Emit grupe adminu
+        admin_groups = []
+        for idx, group in enumerate(groups):
+            admin_groups.append({
+                "group_id": idx + 1,
+                "players": [
+                    {"name": User.query.filter_by(socket_id=client).first().username, "id": client}
+                    for client in group
+                ]
+            })
+
+        sio.emit("groupsDistribution", {"groups": admin_groups}, to=clients[0])
+
+
+        for idx, group in enumerate(groups):
+            new_game = Game(
+                teacher_id=game.teacher_id,
+                topic_selected=game.topic_selected,
+                start_time=datetime.now(),
+                is_locked=True,
+                game_code=f"{game.game_code}_group_{idx + 1}",
+                mode=game.mode,
+            )
+            db.add(new_game)
+            db.commit()
+
+
+            new_game_id = str(new_game.game_id)
+
+            if new_game_id not in questions:
+                questions[new_game_id] = {}
+
+            for client in group:
+                student = db.query(User).filter_by(socket_id=client).first()
+                if student:
+                    student.game_id = new_game_id
+                    db.commit()
+
+                await sio.enter_room(client, str(new_game_id))
+
+                user_questions = generate_questions(topic_id)
+                questions[str(new_game_id)][client] = [task["task_id"] for task in user_questions]
+
+                await sio.emit(
+                    "receiveQuestions",
+                    {
+                        "questions": user_questions,
+                        "game_id": str(new_game_id),
+                        "topic_id": topic_id,
+                    },
+                    to=client,
+                )
+
+
+    else:
+        # Single-room (default)
+        for client in clients[1:]:
+            user_questions = generate_questions(topic_id)
+            questions[room_id][client] = [task["task_id"] for task in user_questions]
+
+            sio.emit(
+                "receiveQuestions",
+                {"questions": user_questions, "game_id": room_id, "topic_id": topic_id},
+                to=client,
+            )
+
+#TODO: change question ?
+
+#TODO: handle player answered
+
+
+@sio.event
+async def endGame(sid, data):
+    db = SessionLocal()
+
+    print("Received data in handle_leave_game:", data)
+    try:
+        room_id = data["room_id"]
+
+        questions.pop(room_id, None) 
+
+        game = (db.query(Game).filter((Game.game_id == room_id)).first())
+
+        if game:
+            
+                game.end_time = datetime.now()
+                db.commit()
+
+        student = (
+            db.query(User).filter(User.socket_id == sid).first()
+        )
+        if student:
+            name = student.username
+
+        await sio.emit("gameEnded", {"winner": name}, room=room_id)
+
+    except Exception as e:
+            db.rollback()
+            await sio.emit("error", {"message": f"Database error {str(e)}"}, room=room_id)
+            return
+    finally:
+        db.close()
+
+
+
+#TODO: POPRAVI OVO DA ODGOVARA NASOJ BAZI
+def generate_questions(topic_id):
+    if topic_id:
+        written_ans = aliased(WrittenAnswer)
+        numerical_ans = aliased(NumericalAnswer)
+        mc_ans = aliased(MultipleChoiceAnswer)
+
+        queries = []
+
+        for diff in ["easy", "medium", "high"]:
+            query = (
+                db.session.query(Question, written_ans, numerical_ans, mc_ans)
+                .filter(Task.topic_id == topic_id, Task.difficulty == diff)
+                .outerjoin(written_ans, Task.task_id == written_ans.task_id)
+                .outerjoin(numerical_ans, Task.task_id == numerical_ans.task_id)
+                .outerjoin(mc_ans, Task.task_id == mc_ans.task_id)
+                .order_by(func.random())
+                .limit(3)
+            )
+            queries.append(query)
+
+        sample = queries[0]
+        for q in queries[1:]:
+            sample = sample.union_all(q)
+
+        ret = []
+
+        for task, written_data, numerical_data, mc_data in sample.all():
+            obj = {
+                "task_id": str(task.task_id),
+                "question": task.question,
+                "difficulty": task.difficulty,
+                "answer": {},
+            }
+
+            if written_data:
+                obj["answer"] = {
+                    "type": "written",
+                    "correct_answer": written_data.correct_answer,
+                }
+            elif numerical_data:
+                obj["answer"] = {
+                    "type": "numerical",
+                    "correct_answer": numerical_data.correct_answer,
+                }
+            else:
+                obj["answer"] = {
+                    "type": "multiple choice",
+                    "option_a": mc_data.option_a,
+                    "option_b": mc_data.option_b,
+                    "option_c": mc_data.option_c,
+                    "correct_answer": mc_data.correct_answer,
+                }
+
+            ret.append(obj)
+
+    return ret

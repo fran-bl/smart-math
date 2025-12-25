@@ -44,3 +44,27 @@ def create_multiplayer_game(
         "game_id": str(game.id),
         "game_code": game.game_code,
     }
+
+
+#TODO: lockroom
+@router.post("/lock-room/<string:game_id>")
+def lock_room(game_id,  db: db_dependency):
+    game = (
+        db.query(Game)
+        .filter(
+            (Game.game_id == game_id)
+        )
+        .first()
+    )
+
+    if not game:
+        return {"message": "No such game in database"}, 404
+
+    try:
+        game.status = "finished"
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return {"message": f"Database error: {str(e)}"}, 500
+
+    return {"game_id": str(game.game_id), "message": "Game finished"}, 200

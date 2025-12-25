@@ -12,7 +12,7 @@ class Game(Base):
     teacher_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
     status = Column(Text, nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
-
+    end_time = Column(TIMESTAMP(timezone=True))
     __table_args__ = (
         CheckConstraint("status IN ('lobby','started','finished')", name="game_status_check"),
     )

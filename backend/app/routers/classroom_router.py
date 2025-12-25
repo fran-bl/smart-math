@@ -187,3 +187,5 @@ def get_unassigned_students(
     )
 
     return [{"id": str(s.id), "username": s.username} for s in students]
+
+#TODO: obrisi ucenika iz vec postojeceg razreda
