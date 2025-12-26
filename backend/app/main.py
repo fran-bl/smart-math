@@ -7,6 +7,8 @@ from .routers.auth import router as auth
 from .routers.classroom_router import router as classroom_router
 from .routers.game_router import router as game_router
 from .routers.topics_router import router as topics_router
+from .routers.stats_router import router as stats_router
+from .routers.override_router import router as override_router
 
 sio = socketio.AsyncServer(
     async_mode="asgi",
@@ -46,6 +48,8 @@ fastapi_app.include_router(auth)
 fastapi_app.include_router(classroom_router)
 fastapi_app.include_router(game_router)
 fastapi_app.include_router(topics_router)
+fastapi_app.include_router(stats_router)
+fastapi_app.include_router(override_router)
 
 
 @fastapi_app.get("/")

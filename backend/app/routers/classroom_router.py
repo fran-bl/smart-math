@@ -189,3 +189,42 @@ def get_unassigned_students(
     return [{"id": str(s.id), "username": s.username} for s in students]
 
 #TODO: obrisi ucenika iz vec postojeceg razreda
+
+
+
+@router.get(
+    "/classroom-students/<string:classroom_name>",
+    summary="Get all students that are assigned to classroom",
+)
+def get_classroom_students(
+    classroom_name,
+    db: db_dependency,
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != "teacher":
+        raise HTTPException(status_code=403, detail="Only teachers can view students.")
+    
+    classroom = (
+        db.query(Classroom).filter((Classroom.class_name == classroom_name)).first()
+    )
+    if not classroom:
+        raise HTTPException(status_code=404, detail="No such classroom.")
+    
+    #check if this is classroom teacher
+    if classroom.teacher_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You are not teacher of this classroom.")
+    
+    students = (
+        db.query(User)
+        .join(
+            user_classroom,
+            user_classroom.c.user_id == User.id
+        )
+        .filter(
+            user_classroom.c.class_id == classroom.id,
+            User.role == "student",
+        )
+        .order_by(User.username.asc())
+        .all()
+    )
+    return [{"id": str(s.id), "username": s.username} for s in students]
