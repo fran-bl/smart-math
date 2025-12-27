@@ -18,7 +18,6 @@ class OverrideRequest(BaseModel):
     action: str
 
 #PRETPOSTAVKA: uvijek overrideamo najnoviji recommendation
-#TODO: provjeri mislimo li za svakog učenika spremati više recommendationa i trebamo li onda dodati created at u recommendation table
 @router.post("/", summary="Override model recommendation")
 def override_decision(request: OverrideRequest, db: db_dependency, current_user: User = Depends(get_current_user),):
     if current_user.role != "teacher":

@@ -15,6 +15,10 @@ from ..models.questions import Question
 from ..models.mc_answer import McAnswer
 from ..models.num_answer import NumAnswer
 from ..models.wri_answer import WriAnswer
+from ..models.rounds import Round
+from ..models.attempts import Attempt
+from sqlalchemy import func, Numeric
+
 
 
 questions = {}
@@ -217,94 +221,48 @@ async def handle_start_game(data):
         return
 
     clients = list(sio.server.manager.rooms["/"].get(room_id, {}).keys())
-    valid_clients = clients[1:] #prva vrijednost je admin socket, to nam ne treba
+    students = clients[1:] #prva vrijednost je admin socket, to nam ne treba
 
     if room_id not in questions:
         questions[room_id] = {}
 
-    # Je li izabrano multiple ili single room
-    if game.room_option == "multiple" and game.players_per_room:
-        # Podijeli clients u grupe prema players_per_room
-        groups = [
-            valid_clients[i:i + game.players_per_room]
-            for i in range(0, len(valid_clients), game.players_per_room)
-        ]
-        if len(groups) > 1 and len(groups[-1]) < 2:
-            last_group = groups.pop()
-            for i, player in enumerate(last_group):
-                groups[i % len(groups)].append(player)
 
-        print(f"Adjusted Grouping Players: {groups}")
+    #generiraj za svakog studenta njegova pitanja i započni njegovu rundu u bazi
+    for sid in students[1:]:
+        session = await sio.get_session(sid)
 
-        # Emit grupe adminu
-        admin_groups = []
-        for idx, group in enumerate(groups):
-            admin_groups.append({
-                "group_id": idx + 1,
-                "players": [
-                    {"name": User.query.filter_by(socket_id=client).first().username, "id": client}
-                    for client in group
-                ]
-            })
+        if not session or session["role"] != "student":
+            continue
 
-        sio.emit("groupsDistribution", {"groups": admin_groups}, to=clients[0])
+        user_id = session["user_id"]
+        student = (db.query(User).filter((User.id == user_id)).first())
+        current_difficulty = student.current_difficulty
+        user_questions = generate_questions(topic_id, current_difficulty)
 
 
-        for idx, group in enumerate(groups):
-            new_game = Game(
-                teacher_id=game.teacher_id,
-                topic_selected=game.topic_selected,
-                start_time=datetime.now(),
-                is_locked=True,
-                game_code=f"{game.game_code}_group_{idx + 1}",
-                mode=game.mode,
-            )
-            db.add(new_game)
-            db.commit()
+        # Create round
+        round_obj = Round(
+            user_id=user_id,
+            game_id=game.id,
+            question_count=len(user_questions),
+        )
+        db.add(round_obj)
+        db.commit()
+        db.refresh(round_obj)
 
 
-            new_game_id = str(new_game.game_id)
+        #TODO: promijeni task
+        questions[room_id][sid] = {
+            "user_id": user_id,
+            "task_ids": [q["task_id"] for q in user_questions],
+        }
 
-            if new_game_id not in questions:
-                questions[new_game_id] = {}
+        await sio.emit(
+            "receiveQuestions",
+            {"questions": user_questions, "game_id": game.id, "topic_id": topic_id},
+            to=sid,
+        )
 
-            for client in group:
-                student = db.query(User).filter_by(socket_id=client).first()
-                if student:
-                    student.game_id = new_game_id
-                    db.commit()
-
-                await sio.enter_room(client, str(new_game_id))
-
-                user_questions = generate_questions(db=db, topic_id=data["selectedTopic"]["topic_id"], limit=9)
-                questions[str(new_game_id)][client] = [task["task_id"] for task in user_questions]
-
-                await sio.emit(
-                    "receiveQuestions",
-                    {
-                        "questions": user_questions,
-                        "game_id": str(new_game_id),
-                        "topic_id": topic_id,
-                    },
-                    to=client,
-                )
-
-
-    else:
-        # Single-room (default)
-        for client in clients[1:]:
-            user_questions = generate_questions(topic_id)
-            questions[room_id][client] = [task["task_id"] for task in user_questions]
-
-            sio.emit(
-                "receiveQuestions",
-                {"questions": user_questions, "game_id": room_id, "topic_id": topic_id},
-                to=client,
-            )
-
-#TODO: change question ?
-
-#TODO: handle player answered
 
 
 @sio.event
@@ -341,18 +299,47 @@ async def endGame(sid, data):
 
 
 
-#TODO: POPRAVI OVO DA ODGOVARA NASIM USE CASEOVIMA
-def generate_questions(db: Session, topic_id, limit=9):
+DIFFICULTY_DISTRIBUTION = {
+    1: {1: 10},
+    2: {1: 3, 2: 5, 3: 2},
+    3: {2: 2, 3: 6, 4: 2},
+    4: {3: 2, 4: 6, 5: 2},
+    5: {4: 5, 5: 5},
+}
+
+def generate_questions(db: Session, topic_id, current_difficulty: int, limit: int =10):
     
     if not topic_id: 
         return []
 
-    rows = (db.query(Question).filter(Question.topic_id == topic_id)
-                            .order_by(func.random()).limit(limit).all())
+
+    distribution = DIFFICULTY_DISTRIBUTION.get(current_difficulty)
+    if not distribution:
+        return []
     
+
+    selected_questions = []
+    #radi samo ako imamo dovoljno pitanja u bazi
+    for difficulty, count in distribution.items():
+        rows = (
+            db.query(Question)
+            .filter(
+                Question.topic_id == topic_id,
+                Question.difficulty == difficulty,
+            )
+            .order_by(func.random())
+            .limit(count)
+            .all()
+        )
+
+        selected_questions.extend(rows)
+
+    #promijesaj da tezine pitanja ne idu redom
+    random.shuffle(selected_questions)
+
     result = []
 
-    for q in rows:
+    for q in selected_questions[:limit]:
         item = {
             "question_id": str(q.id),
             "question": q.text,
@@ -403,3 +390,72 @@ def generate_questions(db: Session, topic_id, limit=9):
         result.append(item)
     
     return result
+
+
+#FRONTEND SALJE:
+#{
+#  "round_id": "...",
+#  "question_id": "...",
+#  "is_correct": true,
+#  "time_spent_secs": 8,
+#  "hints_used": 1,
+#  "num_attempts": 2
+#}
+#EVENT ZA HANDLEANJE SVAKOG ODGOVORA NA PITANJE
+@sio.event
+async def submit_answer(sid, data):
+    db: Session = SessionLocal()
+
+    session = await sio.get_session(sid)
+    if not session:
+        return
+
+    user_id = session["user_id"]
+
+    attempt = Attempt(
+        user_id=user_id,
+        question_id=data["question_id"],
+        round_id=data["round_id"],
+        is_correct=data["is_correct"],
+        num_attempts=data.get("num_attempts", 1),
+        time_spent_secs=data.get("time_spent_secs", 0),
+        hints_used=data.get("hints_used", 0),
+    )
+
+    db.add(attempt)
+    db.commit()
+
+
+#EVENT ZA GOTOVU RUNDU SVAKOG UCENIKA
+@sio.event
+async def finish_round(sid, data):
+    db = SessionLocal()
+    finalize_round(db, data["round_id"])
+
+
+
+def finalize_round(db: Session, round_id):
+    stats = (
+        db.query(
+            func.count(Attempt.id),
+            func.avg(Attempt.time_spent_secs),
+            func.sum(Attempt.hints_used),
+            func.avg(func.cast(Attempt.is_correct, Numeric)),
+        )
+        .filter(Attempt.round_id == round_id)
+        .one()
+    )
+
+    total, avg_time, hints, accuracy = stats
+
+    round_obj = db.query(Round).filter(Round.id == round_id).one()
+
+    round_obj.end_ts = func.now()
+    round_obj.avg_time_secs = avg_time or 0
+    round_obj.hint_rate = (hints / total) if total else 0
+    round_obj.accuracy = accuracy or 0
+
+    db.commit()
+
+
+#TODO: kako računamo student_stats, što je xp etc.
