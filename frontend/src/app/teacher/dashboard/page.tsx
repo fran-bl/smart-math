@@ -15,6 +15,11 @@ interface Classroom {
     student_count: number;
 }
 
+interface Student {
+    id: string;
+    username: string;
+}
+
 export default function TeacherDashboard() {
     const router = useRouter();
     const { user, isAuthenticated, isHydrated, logout } = useAuthStore();
@@ -28,6 +33,9 @@ export default function TeacherDashboard() {
     const [selectedClassroom, setSelectedClassroom] = useState<Classroom | null>(null);
     const [isLoadingClassrooms, setIsLoadingClassrooms] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [students, setStudents] = useState<Student[]>([]);
+    const [isLoadingStudents, setIsLoadingStudents] = useState(false);
+    const [studentsError, setStudentsError] = useState<string | null>(null);
 
     // Fetch classrooms
     const fetchClassrooms = useCallback(async () => {
@@ -56,6 +64,20 @@ export default function TeacherDashboard() {
         }
     }, []);
 
+    const fetchStudents = useCallback(async (classroomId: string) => {
+        setIsLoadingStudents(true);
+        setStudentsError(null);
+        try {
+            const data = await api.get<Student[]>(`/classroom/${classroomId}/students`);
+            setStudents(data);
+        } catch (err) {
+            setStudentsError('Nije moguće učitati učenike');
+            console.error(err);
+        } finally {
+            setIsLoadingStudents(false);
+        }
+    }, []);
+
     // Redirect to login if not authenticated
     useEffect(() => {
         if (isHydrated && (!isAuthenticated || !user)) {
@@ -76,6 +98,17 @@ export default function TeacherDashboard() {
             fetchClassrooms();
         }
     }, [isHydrated, isAuthenticated, user, fetchClassrooms]);
+
+    // Load students when classroom selection changes
+    useEffect(() => {
+        if (!selectedClassroom?.id) {
+            setStudents([]);
+            setStudentsError(null);
+            setIsLoadingStudents(false);
+            return;
+        }
+        fetchStudents(selectedClassroom.id);
+    }, [selectedClassroom?.id, fetchStudents]);
 
     const handleLogout = () => {
         logout();
@@ -206,16 +239,42 @@ export default function TeacherDashboard() {
                                 Broj učenika: <span className="font-semibold ml-2">{selectedClassroom.student_count}</span>
                             </p>
 
-                            {/* Students placeholder */}
-                            {selectedClassroom.student_count === 0 ? (
-                                <div className="text-center py-8 text-gray-500 mt-6">
-                                    <p className="font-medium mb-1">Nema učenika u razredu</p>
-                                </div>
-                            ) : (
-                                <div className="text-center py-8 text-gray-500 mt-6">
-                                    {/* TODO: ovdje dodati popis učenika */}
-                                </div>
-                            )}
+                            {/* Students list */}
+                            <div className="mt-6">
+                                {studentsError && (
+                                    <div className="mb-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                                        <p className="text-red-600 dark:text-red-400 text-sm">{studentsError}</p>
+                                    </div>
+                                )}
+
+                                {isLoadingStudents ? (
+                                    <div className="flex items-center justify-center py-6">
+                                        <Spinner />
+                                    </div>
+                                ) : students.length === 0 ? (
+                                    <div className="text-center py-6 text-gray-500">
+                                        <p className="font-medium mb-1">Nema učenika u razredu</p>
+                                    </div>
+                                ) : (
+                                    <div
+                                        className="rounded-xl border p-3"
+                                        style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
+                                    >
+                                        <div className="max-h-60 overflow-auto">
+                                            <ul className="space-y-2">
+                                                {students.map((s) => (
+                                                    <li key={s.id} className="flex items-center justify-between">
+                                                        <span className="flex items-center gap-2 font-medium">
+                                                            <i className="fa-regular fa-user text-gray-400 dark:text-gray-500" />
+                                                            {s.username}
+                                                        </span>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     ) : null}
                 </div>
@@ -250,6 +309,7 @@ export default function TeacherDashboard() {
                     onClose={() => setShowAddStudents(false)}
                     onSuccess={() => {
                         fetchClassrooms();
+                        if (selectedClassroom?.id) fetchStudents(selectedClassroom.id);
                     }}
                     classroomName={selectedClassroom.class_name}
                 />

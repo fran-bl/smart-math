@@ -25,6 +25,11 @@ class AddStudentsReqest(BaseModel):
     student_list: List[str]
 
 
+class StudentOut(BaseModel):
+    id: str
+    username: str
+
+
 def generateClasroomCode():
     letters = "ABCD"
 
@@ -227,4 +232,36 @@ def get_classroom_students(
         .order_by(User.username.asc())
         .all()
     )
+    return [{"id": str(s.id), "username": s.username} for s in students]
+
+
+@router.get(
+    "/{classroom_id}/students",
+    summary="Get all students in a classroom (teacher only, by classroom_id)",
+    response_model=List[StudentOut],
+)
+def get_students_in_classroom_by_id(
+    classroom_id: str,
+    db: db_dependency,
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != "teacher":
+        raise HTTPException(status_code=403, detail="Only teachers can view students.")
+
+    classroom = (
+        db.query(Classroom)
+        .filter(Classroom.id == classroom_id, Classroom.teacher_id == current_user.id)
+        .first()
+    )
+    if not classroom:
+        raise HTTPException(status_code=404, detail="No such classroom.")
+
+    students = (
+        db.query(User)
+        .join(user_classroom, user_classroom.c.user_id == User.id)
+        .filter(user_classroom.c.class_id == classroom.id, User.role == "student")
+        .order_by(User.username.asc())
+        .all()
+    )
+
     return [{"id": str(s.id), "username": s.username} for s in students]
