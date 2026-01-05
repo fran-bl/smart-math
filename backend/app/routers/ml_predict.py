@@ -19,7 +19,10 @@ router = APIRouter()
 # endpoint za predikciju
 @router.post("/predict", response_model=DifficultyResponse)
 def predict_difficulty(data: DifficultyRequest):
-    # preracunavamo u ispravan format
+    predict_function(data)
+   
+def predict_function(data: DifficultyRequest):
+     # preracunavamo u ispravan format
     X = pd.DataFrame([{
         "accuracy": data.accuracy,
         "avg_time": data.avg_time,
@@ -37,3 +40,4 @@ def predict_difficulty(data: DifficultyRequest):
     prob_dict = {int(c): float(p) for c, p in zip(model.classes_, proba)}
 
     return DifficultyResponse(label=label, probabilities=prob_dict)
+

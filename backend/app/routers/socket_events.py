@@ -19,6 +19,9 @@ from ..models.wri_answer import WriAnswer
 from ..models.rounds import Round
 from ..models.attempts import Attempt
 from sqlalchemy import func, Numeric
+from ml_predict import predict_function
+from ..models.recommendations import Recommendation
+from ..models.student_stats import StudentStats
 
 
 
@@ -252,10 +255,9 @@ async def handle_start_game(data):
         db.refresh(round_obj)
 
 
-        #TODO: promijeni task
         questions[room_id][sid] = {
             "user_id": user_id,
-            "task_ids": [q["task_id"] for q in user_questions],
+            "question_ids": [q["question_id"] for q in user_questions],
         }
 
         await sio.emit(
@@ -426,16 +428,67 @@ async def submit_answer(sid, data):
     db.add(attempt)
     db.commit()
 
+#dohvati novi batch pitanja
+#frontend salje:
+#topic_id = data["selectedTopic"]["topic_id"]
+#room_id = data["room_id"]
+@sio.event
+async def fetch_new_batch(sid, data):
+    db: Session = SessionLocal()
+
+    session = await sio.get_session(sid)
+
+    user_id = session["user_id"]
+    game_id = session.get("game_id")
+    topic_id = data["selectedTopic"]["topic_id"]
+    room_id = data["room_id"]
+    
+    student = (db.query(User).filter((User.id == user_id)).first())
+    current_difficulty = student.current_difficulty
+    user_questions = generate_questions(topic_id, current_difficulty)
+
+
+        # Create round
+    round_obj = Round(
+            user_id=user_id,
+            game_id=game_id,
+            question_count=len(user_questions),
+        )
+    db.add(round_obj)
+    db.commit()
+    db.refresh(round_obj)
+
+
+      
+    questions[room_id][sid] = {
+            "user_id": user_id,
+            "question_ids": [q["question_id"] for q in user_questions],
+        }
+
+    await sio.emit(
+            "receiveQuestions",
+            {"questions": user_questions, "game_id": game_id, "topic_id": topic_id},
+            to=sid,
+        )
+
+
 
 #EVENT ZA GOTOVU RUNDU SVAKOG UCENIKA
 @sio.event
 async def finish_round(sid, data):
     db = SessionLocal()
-    finalize_round(db, data["round_id"])
+    session = await sio.get_session(sid)
+
+    user_id = session["user_id"]
+    finalize_round(db, data["round_id"], user_id)
 
 
 
-def finalize_round(db: Session, round_id):
+def finalize_round(db: Session, round_id, user_id):
+
+    student = (db.query(User).filter((User.id == user_id)).first())
+    
+
     stats = (
         db.query(
             func.count(Attempt.id),
@@ -457,6 +510,79 @@ def finalize_round(db: Session, round_id):
     round_obj.accuracy = accuracy or 0
 
     db.commit()
+    db.refresh(round_obj)
+
+    #call model
+    label, probabilities = predict_function(
+        accuracy=round_obj.accuracy,
+        avg_time=round_obj.avg_time_secs,
+        hints_used=round_obj.hints, #TODO: trebamo li hints ili hint_rate
+    )
 
 
-#TODO: kako računamo student_stats, što je xp etc.
+    if label == 0:
+        rec_text = "down"
+        if student.current_difficulty > 1:
+            new_diff = student.current_difficulty - 1
+    elif label == 1:
+        rec_text = "same"
+        new_diff = student.current_difficulty
+    elif label == 2:
+        rec_text = "up"
+        if student.current_difficulty < 5:
+            new_diff = student.current_difficulty + 1
+    
+    #create new recommendation based on model prediction and apply it instantly
+    recommendation = Recommendation(
+            round_id = round_id,
+            user_id=user_id,
+            rec = rec_text,
+            confidence = probabilities,
+            prev_difficulty = student.current_difficulty,
+            new_difficulty = new_diff
+        )
+    db.add(recommendation)
+
+    student.current_difficulty = new_diff
+    db.add(student)
+    db.commit()
+    
+    #student stats
+    round_attempts = round_obj.question_count
+    round_accuracy = float(round_obj.accuracy)
+
+    stats = (
+        db.query(StudentStats)
+        .filter(StudentStats.user_id == round_obj.user_id)
+        .one_or_none()
+    )
+
+    if not stats:
+        stats = StudentStats(
+            user_id=round_obj.user_id,
+            total_attempts=0,
+            overall_accuracy=0,
+            xp=0,
+        )
+        db.add(stats)
+
+    old_attempts = stats.total_attempts
+    old_accuracy = float(stats.overall_accuracy or 0)
+
+    new_attempts = old_attempts + round_attempts
+
+    # weighted average accuracy
+    new_accuracy = (
+        (old_accuracy * old_attempts)
+        + (round_accuracy * round_attempts)
+    ) / new_attempts
+
+    # XP (podlozno promjeni ovisi kak se dogovorimo)
+    xp_gained = int(round_accuracy * 100)
+
+    stats.total_attempts = new_attempts
+    stats.overall_accuracy = new_accuracy
+    stats.xp += xp_gained
+
+    db.add(stats)
+    db.commit()
