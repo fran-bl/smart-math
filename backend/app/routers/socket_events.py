@@ -1,31 +1,52 @@
 import datetime
 import random
-from typing import Annotated
-from urllib import request
+import uuid
 
 from app.main import sio
+from sqlalchemy import Numeric, func
+from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
+from ..models.attempts import Attempt
 from ..models.game import Game
-from ..models.users import User
 from ..models.game_players import GamePlayers
-from ..models.users import User
-from .socket_auth import authenticate_socket_with_token
-from sqlalchemy.orm import Session
-from ..models.questions import Question
 from ..models.mc_answer import McAnswer
 from ..models.num_answer import NumAnswer
-from ..models.wri_answer import WriAnswer
+from ..models.questions import Question
 from ..models.rounds import Round
-from ..models.attempts import Attempt
-from sqlalchemy import func, Numeric
-from ml_predict import predict_function
+from ..models.users import User
+from ..models.wri_answer import WriAnswer
+from .socket_auth import authenticate_socket_with_token
+
+try:
+    # ml_predict is a router module under app/routers
+    from .ml_predict import predict_function
+except Exception:
+    predict_function = None
 from ..models.recommendations import Recommendation
 from ..models.student_stats import StudentStats
 
-
-
 questions = {}
+
+
+def _finish_game(db: Session, game: Game) -> None:
+    """Mark game as finished and deactivate all active players."""
+    game.status = "finished"
+    game.end_time = datetime.datetime.utcnow()
+    db.add(game)
+
+    active_players = (
+        db.query(GamePlayers)
+        .filter(GamePlayers.game_id == game.id, GamePlayers.is_active.is_(True))
+        .all()
+    )
+    for p in active_players:
+        p.is_active = False
+        p.left_at = datetime.datetime.utcnow()
+        db.add(p)
+
+    db.commit()
+
 
 @sio.event
 async def connect(sid, environ, auth):
@@ -70,23 +91,37 @@ async def teacherJoin(sid, data):
         return
 
     db = SessionLocal()
+    try:
+        # Accept joining both lobby and started games (teacher page needs to reconnect after start).
+        # Parse ids defensively because socket session stores them as strings.
+        teacher_id = uuid.UUID(str(session["user_id"]))
+        game_id = uuid.UUID(str(data["game_id"]))
 
-    game = (
-        db.query(Game)
-        .filter(
-            Game.id == data["game_id"],
-            Game.teacher_id == session["user_id"],
-            Game.status == "lobby",
+        game = (
+            db.query(Game)
+            .filter(
+                Game.id == game_id,
+                Game.teacher_id == teacher_id,
+            )
+            .first()
         )
-        .first()
-    )
 
-    if not game:
-        await sio.emit("error", {"message": "Invalid game"}, to=sid)
-        return
+        if not game:
+            await sio.emit("error", {"message": "Invalid game"}, to=sid)
+            return
+        if game.status == "finished":
+            await sio.emit("error", {"message": "Game already finished"}, to=sid)
+            return
 
-    await sio.enter_room(sid, str(game.id))
-    await emit_players(game.id)
+        await sio.enter_room(sid, str(game.id))
+        # Store game_id for teacher so we can close the lobby if teacher disconnects.
+        mode = None
+        if isinstance(data, dict):
+            mode = data.get("mode")
+        await sio.save_session(sid, {**session, "game_id": str(game.id), "mode": mode})
+        await emit_players(game.id)
+    finally:
+        db.close()
 
 
 # student join
@@ -99,112 +134,253 @@ async def handle_join_game(sid, data):
         return
 
     db = SessionLocal()
-
-    game = (
-        db.query(Game)
-        .filter(Game.game_code == data["game_code"], Game.status == "lobby")
-        .first()
-    )
-
-    if not game:
-        await sio.emit("error", {"message": "Game not found"}, to=sid)
-        return
-
-    user_id = session["user_id"]
-
-    user = db.query(User).filter(User.id == user_id, User.role == "student").first()
-
-    if not user:
-        await sio.emit("error", {"message": "User not found"}, to=sid)
-        return
-
-    player = db.query(GamePlayers).filter_by(game_id=game.id, user_id=user.id).first()
-
-    if player:
-        player.socket_id = sid
-        player.is_active = True
-        player.left_at = None
-    else:
-        db.add(
-            GamePlayers(
-                game_id=game.id,
-                user_id=user.id,
-                socket_id=sid,
-            )
+    try:
+        game = (
+            db.query(Game)
+            .filter(Game.game_code == data["game_code"], Game.status == "lobby")
+            .first()
         )
 
-    db.commit()
+        if not game:
+            await sio.emit("error", {"message": "Game not found"}, to=sid)
+            return
 
-    # Store game_id on the socket session so we can cleanly handle disconnects
-    await sio.save_session(
-        sid,
-        {
-            **session,
-            "game_id": str(game.id),
-        },
-    )
+        user_id = session["user_id"]
 
-    await sio.enter_room(sid, str(game.id))
-    await emit_players(game.id)
+        user = db.query(User).filter(User.id == user_id, User.role == "student").first()
+
+        if not user:
+            await sio.emit("error", {"message": "User not found"}, to=sid)
+            return
+
+        player = (
+            db.query(GamePlayers).filter_by(game_id=game.id, user_id=user.id).first()
+        )
+
+        if player:
+            player.socket_id = sid
+            player.is_active = True
+            player.left_at = None
+        else:
+            db.add(
+                GamePlayers(
+                    game_id=game.id,
+                    user_id=user.id,
+                    socket_id=sid,
+                    is_active=True,
+                    left_at=None,
+                )
+            )
+
+        db.commit()
+
+        # Store game_id on the socket session so we can cleanly handle disconnects
+        await sio.save_session(
+            sid,
+            {
+                **session,
+                "game_id": str(game.id),
+            },
+        )
+
+        await sio.enter_room(sid, str(game.id))
+        await emit_players(game.id)
+
+        # Ack to the joining student so the UI can stop "connecting" even if updatePlayers is delayed.
+        await sio.emit("joinedGame", {"game_id": str(game.id)}, to=sid)
+    finally:
+        db.close()
+
+
+@sio.event
+async def joinGame(sid, data):
+    """
+    Frontend emits `joinGame`.
+    Keep the existing implementation in `handle_join_game` and expose this wrapper
+    so students don't get stuck in infinite "Povezivanje..." when the event name mismatches.
+    """
+    return await handle_join_game(sid, data)
 
 
 async def emit_players(game_id):
     db = SessionLocal()
+    try:
+        rows = (
+            db.query(
+                User.id.label("user_id"),
+                User.username.label("username"),
+                User.current_difficulty.label("level"),
+                StudentStats.xp.label("xp"),
+            )
+            .join(GamePlayers, GamePlayers.user_id == User.id)
+            .outerjoin(StudentStats, StudentStats.user_id == User.id)
+            .filter(GamePlayers.game_id == game_id, GamePlayers.is_active.is_(True))
+            .all()
+        )
 
-    players = (
-        db.query(User.username)
-        .join(GamePlayers, GamePlayers.user_id == User.id)
-        .filter(GamePlayers.game_id == game_id, GamePlayers.is_active.is_(True))
-        .all()
-    )
+        players_simple = [r.username for r in rows]
 
-    await sio.emit(
-        "updatePlayers",
-        {"players": [p.username for p in players]},
-        room=str(game_id),
-    )
+        # Rank players by XP (desc). If stats row doesn't exist, treat as 0.
+        ranked = sorted(rows, key=lambda r: int(r.xp or 0), reverse=True)
+        rank_by_user_id = {str(r.user_id): idx + 1 for idx, r in enumerate(ranked)}
+
+        players_detailed = [
+            {
+                "user_id": str(r.user_id),
+                "username": r.username,
+                "level": int(r.level or 1),
+                "xp": int(r.xp or 0),
+                "rank": int(rank_by_user_id.get(str(r.user_id), 0) or 0),
+            }
+            for r in rows
+        ]
+
+        await sio.emit(
+            "updatePlayers",
+            {"players": players_simple, "playersDetailed": players_detailed},
+            room=str(game_id),
+        )
+    finally:
+        db.close()
 
 
 @sio.event
 async def disconnect(sid):
     db = SessionLocal()
-
-    # Prefer DB lookup by socket_id; fallback to session if needed
-    player = (
-        db.query(GamePlayers)
-        .filter(GamePlayers.socket_id == sid, GamePlayers.is_active.is_(True))
-        .first()
-    )
-
-    if not player:
+    try:
+        # IMPORTANT:
+        # A teacher may "disconnect" simply by navigating from the lobby modal to the /teacher/game page,
+        # which creates a new socket connection. Auto-closing the lobby here causes false "game finished"
+        # and kicks students out. We only close games via explicit events (closeLobby/endGame).
         try:
             session = await sio.get_session(sid)
         except Exception:
+            session = None
+
+        # If teacher leaves the *game page* (mode == 'game'), end the game for everyone.
+        # (We intentionally do NOT auto-finish on lobby disconnect, because navigating to the game page
+        # creates a new socket and would otherwise end the lobby immediately.)
+        if session and session.get("role") == "teacher":
+            if session.get("mode") == "game" and session.get("game_id"):
+                try:
+                    game_id = uuid.UUID(str(session["game_id"]))
+                    teacher_id = uuid.UUID(str(session["user_id"]))
+                except Exception:
+                    return
+
+                game = (
+                    db.query(Game)
+                    .filter(Game.id == game_id, Game.teacher_id == teacher_id)
+                    .first()
+                )
+                if game and game.status != "finished":
+                    _finish_game(db, game)
+                    await sio.emit(
+                        "gameClosed", {"game_id": str(game.id)}, room=str(game.id)
+                    )
             return
 
-        user_id = session.get("user_id") if session else None
-        game_id = session.get("game_id") if session else None
-        if not user_id or not game_id:
-            return
-
+        # Prefer DB lookup by socket_id; fallback to session if needed
         player = (
             db.query(GamePlayers)
-            .filter(
-                GamePlayers.user_id == user_id,
-                GamePlayers.game_id == game_id,
-                GamePlayers.is_active.is_(True),
-            )
+            .filter(GamePlayers.socket_id == sid, GamePlayers.is_active.is_(True))
             .first()
         )
 
-    if not player:
+        if not player:
+            user_id = session.get("user_id") if session else None
+            game_id = session.get("game_id") if session else None
+            if not user_id or not game_id:
+                return
+
+            player = (
+                db.query(GamePlayers)
+                .filter(
+                    GamePlayers.user_id == user_id,
+                    GamePlayers.game_id == game_id,
+                    GamePlayers.is_active.is_(True),
+                )
+                .first()
+            )
+
+            if not player:
+                return
+
+        player.is_active = False
+        player.left_at = datetime.datetime.utcnow()
+        db.commit()
+
+        await emit_players(player.game_id)
+    finally:
+        db.close()
+
+
+@sio.event
+async def closeLobby(sid, data):
+    """Teacher closes the lobby modal before/without playing. End game for all students."""
+    session = await sio.get_session(sid)
+    if not session or session.get("role") != "teacher":
         return
 
-    player.is_active = False
-    player.left_at = datetime.datetime.utcnow()
-    db.commit()
+    game_id_raw = data.get("game_id") if isinstance(data, dict) else None
+    if not game_id_raw:
+        return
 
-    await emit_players(player.game_id)
+    db = SessionLocal()
+    try:
+        try:
+            game_id = uuid.UUID(str(game_id_raw))
+            teacher_id = uuid.UUID(str(session["user_id"]))
+        except Exception:
+            return
+
+        game = (
+            db.query(Game)
+            .filter(Game.id == game_id, Game.teacher_id == teacher_id)
+            .first()
+        )
+        if not game or game.status == "finished":
+            return
+
+        _finish_game(db, game)
+        await sio.emit("gameClosed", {"game_id": str(game.id)}, room=str(game.id))
+    finally:
+        db.close()
+
+
+@sio.event
+async def endGame(sid, data):
+    """Teacher ends an active game explicitly (from game page)."""
+    session = await sio.get_session(sid)
+    if not session or session.get("role") != "teacher":
+        return
+
+    game_id_raw = data.get("game_id") if isinstance(data, dict) else None
+    if not game_id_raw:
+        game_id_raw = session.get("game_id")
+    if not game_id_raw:
+        return
+
+    db = SessionLocal()
+    try:
+        try:
+            game_id = uuid.UUID(str(game_id_raw))
+            teacher_id = uuid.UUID(str(session["user_id"]))
+        except Exception:
+            return
+
+        game = (
+            db.query(Game)
+            .filter(Game.id == game_id, Game.teacher_id == teacher_id)
+            .first()
+        )
+        if not game or game.status == "finished":
+            return
+
+        _finish_game(db, game)
+        await sio.emit("gameClosed", {"game_id": str(game.id)}, room=str(game.id))
+    finally:
+        db.close()
 
 
 async def get_socket_user(sid):
@@ -212,94 +388,111 @@ async def get_socket_user(sid):
     return session
 
 
-
 @sio.event
-async def handle_start_game(data):
-    db = SessionLocal()
-    room_id = data["room_id"]
-    topic_id = data["selectedTopic"]["topic_id"]
-
-    game = Game.query.filter_by(game_id=room_id).first()
-    if not game:
-        sio.emit("error", {"message": "Game not found"}, to=request.sid)
+async def startGame(sid, data):
+    """Teacher starts the game and emits receiveQuestions (with round_id) to each student socket."""
+    session = await sio.get_session(sid)
+    if not session or session.get("role") != "teacher":
+        await sio.emit("error", {"message": "Unauthorized"}, to=sid)
         return
 
-    clients = list(sio.server.manager.rooms["/"].get(room_id, {}).keys())
-    students = clients[1:] #prva vrijednost je admin socket, to nam ne treba
+    if not isinstance(data, dict):
+        await sio.emit("error", {"message": "Invalid payload"}, to=sid)
+        return
 
-    if room_id not in questions:
-        questions[room_id] = {}
+    game_id = data.get("game_id")
+    topic_id = data.get("topic_id")
+    if not game_id or not topic_id:
+        await sio.emit("error", {"message": "Missing game_id or topic_id"}, to=sid)
+        return
 
-
-    #generiraj za svakog studenta njegova pitanja i započni njegovu rundu u bazi
-    for sid in students[1:]:
-        session = await sio.get_session(sid)
-
-        if not session or session["role"] != "student":
-            continue
-
-        user_id = session["user_id"]
-        student = (db.query(User).filter((User.id == user_id)).first())
-        current_difficulty = student.current_difficulty
-        user_questions = generate_questions(topic_id, current_difficulty)
-
-
-        # Create round
-        round_obj = Round(
-            user_id=user_id,
-            game_id=game.id,
-            question_count=len(user_questions),
-        )
-        db.add(round_obj)
-        db.commit()
-        db.refresh(round_obj)
-
-
-        questions[room_id][sid] = {
-            "user_id": user_id,
-            "question_ids": [q["question_id"] for q in user_questions],
-        }
-
-        await sio.emit(
-            "receiveQuestions",
-            {"questions": user_questions, "game_id": game.id, "topic_id": topic_id},
-            to=sid,
-        )
-
-
-
-@sio.event
-async def endGame(sid, data):
     db = SessionLocal()
-
-    print("Received data in handle_leave_game:", data)
     try:
-        room_id = data["room_id"]
-
-        questions.pop(room_id, None) 
-
-        game = (db.query(Game).filter((Game.game_id == room_id)).first())
-
-        if game:
-            
-                game.end_time = datetime.now()
-                db.commit()
-
-        student = (
-            db.query(User).filter(User.socket_id == sid).first()
+        game = (
+            db.query(Game)
+            .filter(
+                Game.id == game_id,
+                Game.teacher_id == session["user_id"],
+                Game.status == "lobby",
+            )
+            .first()
         )
-        if student:
-            name = student.username
-
-        await sio.emit("gameEnded", {"winner": name}, room=room_id)
-
-    except Exception as e:
-            db.rollback()
-            await sio.emit("error", {"message": f"Database error {str(e)}"}, room=room_id)
+        if not game:
+            await sio.emit("error", {"message": "Game not found"}, to=sid)
             return
+        game.status = "started"
+        db.add(game)
+        db.commit()
+
+        room_key = str(game.id)
+        if room_key not in questions:
+            questions[room_key] = {}
+
+        active = (
+            db.query(GamePlayers)
+            .filter(GamePlayers.game_id == game.id, GamePlayers.is_active.is_(True))
+            .all()
+        )
+
+        for gp in active:
+            if not gp.socket_id:
+                continue
+            student = (
+                db.query(User)
+                .filter(User.id == gp.user_id, User.role == "student")
+                .first()
+            )
+            if not student:
+                continue
+
+            user_questions = generate_questions(
+                db, topic_id, student.current_difficulty
+            )
+
+            round_obj = Round(
+                user_id=student.id,
+                game_id=game.id,
+                question_count=len(user_questions),
+            )
+            db.add(round_obj)
+            db.commit()
+            db.refresh(round_obj)
+
+            questions[room_key][gp.socket_id] = {
+                "user_id": str(student.id),
+                "question_ids": [q["question_id"] for q in user_questions],
+                "round_id": str(round_obj.id),
+            }
+
+            await sio.emit(
+                "receiveQuestions",
+                {
+                    "questions": user_questions,
+                    "game_id": str(game.id),
+                    "topic_id": str(topic_id),
+                    "round_id": str(round_obj.id),
+                },
+                to=gp.socket_id,
+            )
+
+        await sio.emit("gameStarted", {"game_id": str(game.id)}, room=room_key)
     finally:
         db.close()
 
+
+@sio.event
+async def handle_start_game(sid, data):
+    # Backwards compatible alias (if any old frontend emits this)
+    await startGame(sid, data)
+
+
+@sio.event
+async def endGameLegacy(sid, data):
+    """
+    Legacy event kept for compatibility with any old clients.
+    Prefer `endGame` + `gameClosed` for the current app.
+    """
+    return
 
 
 DIFFICULTY_DISTRIBUTION = {
@@ -310,19 +503,17 @@ DIFFICULTY_DISTRIBUTION = {
     5: {4: 5, 5: 5},
 }
 
-def generate_questions(db: Session, topic_id, current_difficulty: int, limit: int =10):
-    
-    if not topic_id: 
-        return []
 
+def generate_questions(db: Session, topic_id, current_difficulty: int, limit: int = 10):
+    if not topic_id:
+        return []
 
     distribution = DIFFICULTY_DISTRIBUTION.get(current_difficulty)
     if not distribution:
         return []
-    
 
     selected_questions = []
-    #radi samo ako imamo dovoljno pitanja u bazi
+    # radi samo ako imamo dovoljno pitanja u bazi
     for difficulty, count in distribution.items():
         rows = (
             db.query(Question)
@@ -337,7 +528,7 @@ def generate_questions(db: Session, topic_id, current_difficulty: int, limit: in
 
         selected_questions.extend(rows)
 
-    #promijesaj da tezine pitanja ne idu redom
+    # promijesaj da tezine pitanja ne idu redom
     random.shuffle(selected_questions)
 
     result = []
@@ -346,17 +537,13 @@ def generate_questions(db: Session, topic_id, current_difficulty: int, limit: in
         item = {
             "question_id": str(q.id),
             "question": q.text,
-            "difficulty": q.difficulty,  
+            "difficulty": q.difficulty,
             "type": q.type,
             "answer": {},
         }
 
         if q.type == "num":
-            ans = (
-                db.query(NumAnswer)
-                .filter(NumAnswer.question_id == q.id)
-                .first()
-            )
+            ans = db.query(NumAnswer).filter(NumAnswer.question_id == q.id).first()
             if ans:
                 item["answer"] = {
                     "type": "numerical",
@@ -364,11 +551,7 @@ def generate_questions(db: Session, topic_id, current_difficulty: int, limit: in
                 }
 
         elif q.type == "mcq":
-            ans = (
-                db.query(McAnswer)
-                .filter(McAnswer.question_id == q.id)
-                .first()
-            )
+            ans = db.query(McAnswer).filter(McAnswer.question_id == q.id).first()
             if ans:
                 item["answer"] = {
                     "type": "multiple_choice",
@@ -379,11 +562,7 @@ def generate_questions(db: Session, topic_id, current_difficulty: int, limit: in
                 }
 
         elif q.type == "wri":
-            ans = (
-                db.query(WriAnswer)
-                .filter(WriAnswer.question_id == q.id)
-                .first()
-            )
+            ans = db.query(WriAnswer).filter(WriAnswer.question_id == q.id).first()
             if ans:
                 item["answer"] = {
                     "type": "written",
@@ -391,103 +570,129 @@ def generate_questions(db: Session, topic_id, current_difficulty: int, limit: in
                 }
 
         result.append(item)
-    
+
     return result
 
 
-#FRONTEND SALJE:
-#{
+# FRONTEND SALJE:
+# {
 #  "round_id": "...",
 #  "question_id": "...",
 #  "is_correct": true,
 #  "time_spent_secs": 8,
 #  "hints_used": 1,
 #  "num_attempts": 2
-#}
-#EVENT ZA HANDLEANJE SVAKOG ODGOVORA NA PITANJE
+# }
+# EVENT ZA HANDLEANJE SVAKOG ODGOVORA NA PITANJE
 @sio.event
 async def submit_answer(sid, data):
     db: Session = SessionLocal()
+    try:
+        session = await sio.get_session(sid)
+        if not session:
+            return
 
-    session = await sio.get_session(sid)
-    if not session:
+        user_id = session["user_id"]
+
+        attempt = Attempt(
+            user_id=user_id,
+            question_id=data["question_id"],
+            round_id=data["round_id"],
+            is_correct=data["is_correct"],
+            num_attempts=data.get("num_attempts", 1),
+            time_spent_secs=data.get("time_spent_secs", 0),
+            hints_used=data.get("hints_used", 0),
+        )
+
+        db.add(attempt)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        await sio.emit("error", {"message": f"Database error {str(e)}"}, to=sid)
         return
+    finally:
+        db.close()
 
-    user_id = session["user_id"]
 
-    attempt = Attempt(
-        user_id=user_id,
-        question_id=data["question_id"],
-        round_id=data["round_id"],
-        is_correct=data["is_correct"],
-        num_attempts=data.get("num_attempts", 1),
-        time_spent_secs=data.get("time_spent_secs", 0),
-        hints_used=data.get("hints_used", 0),
-    )
-
-    db.add(attempt)
-    db.commit()
-
-#dohvati novi batch pitanja
-#frontend salje:
-#topic_id = data["selectedTopic"]["topic_id"]
-#room_id = data["room_id"]
+# dohvati novi batch pitanja
+# frontend salje:
+# topic_id = data["selectedTopic"]["topic_id"]
+# room_id = data["room_id"]
 @sio.event
 async def fetch_new_batch(sid, data):
     db: Session = SessionLocal()
+    try:
+        session = await sio.get_session(sid)
+        if not session:
+            return
 
-    session = await sio.get_session(sid)
+        user_id = session["user_id"]
+        game_id = session.get("game_id")
+        topic_id = data["selectedTopic"]["topic_id"]
+        room_id = data["room_id"]
 
-    user_id = session["user_id"]
-    game_id = session.get("game_id")
-    topic_id = data["selectedTopic"]["topic_id"]
-    room_id = data["room_id"]
-    
-    student = (db.query(User).filter((User.id == user_id)).first())
-    current_difficulty = student.current_difficulty
-    user_questions = generate_questions(topic_id, current_difficulty)
+        student = db.query(User).filter((User.id == user_id)).first()
+        if not student:
+            await sio.emit("error", {"message": "User not found"}, to=sid)
+            return
 
+        current_difficulty = student.current_difficulty
+        user_questions = generate_questions(db, topic_id, current_difficulty)
 
         # Create round
-    round_obj = Round(
+        round_obj = Round(
             user_id=user_id,
             game_id=game_id,
             question_count=len(user_questions),
         )
-    db.add(round_obj)
-    db.commit()
-    db.refresh(round_obj)
+        db.add(round_obj)
+        db.commit()
+        db.refresh(round_obj)
 
+        if room_id not in questions:
+            questions[room_id] = {}
 
-      
-    questions[room_id][sid] = {
-            "user_id": user_id,
+        questions[room_id][sid] = {
+            "user_id": str(user_id),
             "question_ids": [q["question_id"] for q in user_questions],
+            "round_id": str(round_obj.id),
         }
 
-    await sio.emit(
+        await sio.emit(
             "receiveQuestions",
-            {"questions": user_questions, "game_id": game_id, "topic_id": topic_id},
+            {
+                "questions": user_questions,
+                "game_id": str(game_id),
+                "topic_id": str(topic_id),
+                "round_id": str(round_obj.id),
+            },
             to=sid,
         )
+    except Exception as e:
+        db.rollback()
+        await sio.emit("error", {"message": f"Database error {str(e)}"}, to=sid)
+        return
+    finally:
+        db.close()
 
 
-
-#EVENT ZA GOTOVU RUNDU SVAKOG UCENIKA
+# EVENT ZA GOTOVU RUNDU SVAKOG UCENIKA
 @sio.event
 async def finish_round(sid, data):
     db = SessionLocal()
-    session = await sio.get_session(sid)
+    try:
+        session = await sio.get_session(sid)
+        if not session:
+            return
 
-    user_id = session["user_id"]
-    finalize_round(db, data["round_id"], user_id)
-
+        user_id = session["user_id"]
+        finalize_round(db, data["round_id"], user_id)
+    finally:
+        db.close()
 
 
 def finalize_round(db: Session, round_id, user_id):
-
-    student = (db.query(User).filter((User.id == user_id)).first())
-    
+    student = db.query(User).filter((User.id == user_id)).first()
 
     stats = (
         db.query(
@@ -506,19 +711,21 @@ def finalize_round(db: Session, round_id, user_id):
 
     round_obj.end_ts = func.now()
     round_obj.avg_time_secs = avg_time or 0
-    round_obj.hint_rate = (hints / total) if total else 0
     round_obj.accuracy = accuracy or 0
 
     db.commit()
     db.refresh(round_obj)
 
-    #call model
-    label, probabilities = predict_function(
-        accuracy=round_obj.accuracy,
-        avg_time=round_obj.avg_time_secs,
-        hints_used=round_obj.hints, #TODO: trebamo li hints ili hint_rate
-    )
+    # call model (optional)
+    if predict_function is None:
+        return
 
+    hint_rate = float((hints or 0) / total) if total else 0.0
+    label, probabilities = predict_function(
+        accuracy=float(round_obj.accuracy or 0),
+        avg_time=float(round_obj.avg_time_secs or 0),
+        hints_used=hint_rate,
+    )
 
     if label == 0:
         rec_text = "down"
@@ -531,23 +738,23 @@ def finalize_round(db: Session, round_id, user_id):
         rec_text = "up"
         if student.current_difficulty < 5:
             new_diff = student.current_difficulty + 1
-    
-    #create new recommendation based on model prediction and apply it instantly
+
+    # create new recommendation based on model prediction and apply it instantly
     recommendation = Recommendation(
-            round_id = round_id,
-            user_id=user_id,
-            rec = rec_text,
-            confidence = probabilities,
-            prev_difficulty = student.current_difficulty,
-            new_difficulty = new_diff
-        )
+        round_id=round_id,
+        user_id=user_id,
+        rec=rec_text,
+        confidence=probabilities,
+        prev_difficulty=student.current_difficulty,
+        new_difficulty=new_diff,
+    )
     db.add(recommendation)
 
     student.current_difficulty = new_diff
     db.add(student)
     db.commit()
-    
-    #student stats
+
+    # student stats
     round_attempts = round_obj.question_count
     round_accuracy = float(round_obj.accuracy)
 
@@ -573,8 +780,7 @@ def finalize_round(db: Session, round_id, user_id):
 
     # weighted average accuracy
     new_accuracy = (
-        (old_accuracy * old_attempts)
-        + (round_accuracy * round_attempts)
+        (old_accuracy * old_attempts) + (round_accuracy * round_attempts)
     ) / new_attempts
 
     # XP (podlozno promjeni ovisi kak se dogovorimo)
