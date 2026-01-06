@@ -1,8 +1,10 @@
 'use client';
 
+import { getAuthedSocket } from '@/lib/realtime/socket';
 import { getEmoji, PASSWORD_KEYS } from '@/lib/utils';
+import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { io, Socket } from 'socket.io-client';
+import { Socket } from 'socket.io-client';
 import { Spinner } from './ui';
 
 interface JoinGameModalProps {
@@ -14,6 +16,7 @@ interface JoinGameModalProps {
 }
 
 export function JoinGameModal({ isOpen, onClose, onJoined, onLeft, existingGameCode }: JoinGameModalProps) {
+    const router = useRouter();
     const [code, setCode] = useState<string[]>(['', '', '', '']);
     const [isConnecting, setIsConnecting] = useState(false);
     const [isJoined, setIsJoined] = useState(false);
@@ -76,41 +79,83 @@ export function JoinGameModal({ isOpen, onClose, onJoined, onLeft, existingGameC
             return;
         }
 
-        cleanupSocket();
         setIsConnecting(true);
 
-        const socket = io('http://localhost:8000', {
-            transports: ['polling', 'websocket'],
-            withCredentials: true,
-            auth: { token },
-            extraHeaders: { Authorization: `Bearer ${token}` },
-        });
+        const socket = getAuthedSocket(token);
 
         socketRef.current = socket;
 
+        // Clean up listeners
+        socket.off('connect');
+        socket.off('joinedGame');
+        socket.off('updatePlayers');
+        socket.off('receiveQuestions');
+        socket.off('gameStarted');
+        socket.off('gameClosed');
+        socket.off('error');
+        socket.off('connect_error');
+        socket.off('disconnect');
+
         socket.on('connect', () => {
             socket.emit('joinGame', { game_code: codeToUse });
+        });
+
+        // Join game if socket is connected.
+        if (socket.connected) {
+            socket.emit('joinGame', { game_code: codeToUse });
+        }
+
+        const timeoutId = window.setTimeout(() => {
+            setError('Nije moguće pridružiti se igri (timeout). Pokušaj ponovno.');
+            setIsConnecting(false);
+        }, 8000);
+
+        socket.on('joinedGame', () => {
+            setIsJoined(true);
+            setIsConnecting(false);
+            onJoined?.(codeToUse);
+            window.clearTimeout(timeoutId);
         });
 
         socket.on('updatePlayers', (data: { players: string[] }) => {
             setIsJoined(true);
             setIsConnecting(false);
             onJoined?.(codeToUse);
+            window.clearTimeout(timeoutId);
+        });
+
+        socket.on('receiveQuestions', (data: any) => {
+            try {
+                const gameId = String(data?.game_id ?? '');
+                if (gameId) {
+                    sessionStorage.setItem(`game_payload_${gameId}`, JSON.stringify(data));
+                    router.push(`/student/game/${gameId}`);
+                }
+            } catch {
+            }
+        });
+
+        socket.on('gameStarted', (data: any) => {
+            const gameId = String(data?.game_id ?? '');
+            if (gameId) {
+                router.push(`/student/game/${gameId}`);
+            }
         });
 
         socket.on('gameClosed', () => {
             // Teacher ended/closed the lobby
-            cleanupSocket();
             setIsConnecting(false);
             setIsJoined(false);
             setIsClosed(true);
             onLeft?.();
+            window.clearTimeout(timeoutId);
         });
 
         socket.on('error', (data: { message?: string }) => {
             setError(data?.message || 'Greška pri spajanju na igru');
             setIsConnecting(false);
             setIsJoined(false);
+            window.clearTimeout(timeoutId);
         });
 
         socket.on('connect_error', (err: unknown) => {
@@ -121,6 +166,7 @@ export function JoinGameModal({ isOpen, onClose, onJoined, onLeft, existingGameC
             setError(msg || 'Greška pri povezivanju');
             setIsConnecting(false);
             setIsJoined(false);
+            window.clearTimeout(timeoutId);
         });
 
         socket.on('disconnect', (reason) => {

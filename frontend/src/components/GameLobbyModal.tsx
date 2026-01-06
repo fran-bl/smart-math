@@ -1,6 +1,7 @@
 'use client';
 
 import { passwordToEmojis } from '@/lib/utils';
+import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { Spinner } from './ui';
@@ -10,11 +11,15 @@ interface GameLobbyModalProps {
     onClose: () => void;
     gameId: string;
     gameCode: string;
+    topic: { id: string; name: string };
+    classroomId: string;
 }
 
-export function GameLobbyModal({ isOpen, onClose, gameId, gameCode }: GameLobbyModalProps) {
+export function GameLobbyModal({ isOpen, onClose, gameId, gameCode, topic, classroomId }: GameLobbyModalProps) {
+    const router = useRouter();
     const [players, setPlayers] = useState<string[]>([]);
     const [isConnecting, setIsConnecting] = useState(true);
+    const [isStarting, setIsStarting] = useState(false);
     const [connectionError, setConnectionError] = useState<string | null>(null);
     const socketRef = useRef<Socket | null>(null);
 
@@ -48,7 +53,7 @@ export function GameLobbyModal({ isOpen, onClose, gameId, gameCode }: GameLobbyM
             setConnectionError(null);
 
             // Teacher joins the game room
-            socket.emit('teacherJoin', { game_id: gameId });
+            socket.emit('teacherJoin', { game_id: gameId, mode: 'lobby' });
         });
 
         socket.on('connect_error', (error) => {
@@ -62,9 +67,21 @@ export function GameLobbyModal({ isOpen, onClose, gameId, gameCode }: GameLobbyM
             setPlayers(data.players);
         });
 
+        socket.on('gameStarted', () => {
+            setIsStarting(false);
+            const params = new URLSearchParams({
+                topicId: topic.id,
+                topicName: topic.name,
+                classroomId,
+            });
+            router.push(`/teacher/game/${gameId}?${params.toString()}`);
+            onClose();
+        });
+
         socket.on('error', (data: { message: string }) => {
             console.error('Socket error:', data.message);
             setConnectionError(data.message);
+            setIsStarting(false);
         });
 
         return () => {
@@ -82,6 +99,7 @@ export function GameLobbyModal({ isOpen, onClose, gameId, gameCode }: GameLobbyM
         }
         setPlayers([]);
         setIsConnecting(true);
+        setIsStarting(false);
         setConnectionError(null);
         onClose();
     };
@@ -169,10 +187,25 @@ export function GameLobbyModal({ isOpen, onClose, gameId, gameCode }: GameLobbyM
                 {/* Start game button */}
                 <button
                     disabled={players.length === 0}
+                    onClick={() => {
+                        if (!socketRef.current || !socketRef.current.connected) {
+                            setConnectionError('Niste povezani na server');
+                            return;
+                        }
+                        setIsStarting(true);
+                        socketRef.current.emit('startGame', { game_id: gameId, topic_id: topic.id });
+                    }}
                     className="btn btn-primary w-full py-3 text-lg disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                     <i className="fa-solid fa-play mr-2" />
-                    Započni igru ({players.length} učenika)
+                    {isStarting ? (
+                        <span className="inline-flex items-center gap-2">
+                            <Spinner />
+                            Pokretanje…
+                        </span>
+                    ) : (
+                        `Započni igru (${players.length} učenika)`
+                    )}
                 </button>
             </div>
         </div>

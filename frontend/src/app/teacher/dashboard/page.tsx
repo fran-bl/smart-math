@@ -20,6 +20,11 @@ interface Student {
     username: string;
 }
 
+interface Topic {
+    id: string;
+    name: string;
+}
+
 export default function TeacherDashboard() {
     const router = useRouter();
     const { user, isAuthenticated, isHydrated, logout } = useAuthStore();
@@ -28,7 +33,12 @@ export default function TeacherDashboard() {
     const [showAddStudents, setShowAddStudents] = useState(false);
     const [showCreateGame, setShowCreateGame] = useState(false);
     const [showGameLobby, setShowGameLobby] = useState(false);
-    const [currentGame, setCurrentGame] = useState<{ gameId: string; gameCode: string } | null>(null);
+    const [currentGame, setCurrentGame] = useState<{
+        gameId: string;
+        gameCode: string;
+        topic: Topic;
+        classroomId: string;
+    } | null>(null);
     const [classrooms, setClassrooms] = useState<Classroom[]>([]);
     const [selectedClassroom, setSelectedClassroom] = useState<Classroom | null>(null);
     const [isLoadingClassrooms, setIsLoadingClassrooms] = useState(true);
@@ -321,7 +331,13 @@ export default function TeacherDashboard() {
                 onClose={() => setShowCreateGame(false)}
                 onGameCreated={(data) => {
                     console.log('Game created:', data);
-                    setCurrentGame({ gameId: data.gameId, gameCode: data.gameCode });
+                    if (!selectedClassroom?.id) return;
+                    setCurrentGame({
+                        gameId: data.gameId,
+                        gameCode: data.gameCode,
+                        topic: data.topic,
+                        classroomId: selectedClassroom.id,
+                    });
                     setShowGameLobby(true);
                 }}
                 classroomId={selectedClassroom?.id}
@@ -337,6 +353,8 @@ export default function TeacherDashboard() {
                     }}
                     gameId={currentGame.gameId}
                     gameCode={currentGame.gameCode}
+                    topic={currentGame.topic}
+                    classroomId={currentGame.classroomId}
                 />
             )}
         </main>
