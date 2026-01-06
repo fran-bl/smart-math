@@ -19,7 +19,7 @@ router = APIRouter()
 # endpoint za predikciju
 @router.post("/predict", response_model=DifficultyResponse)
 def predict_difficulty(data: DifficultyRequest):
-    predict_function(data)
+    return predict_function(data)
    
 def predict_function(data: DifficultyRequest):
      # preracunavamo u ispravan format

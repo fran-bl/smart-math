@@ -2,9 +2,9 @@ from .users import User
 from .classroom import Classroom
 from .questions import Question
 from .topics import Topic
-from .mc_answer import McAnswer
+#from .mc_answer import McAnswer
 from .num_answer import NumAnswer
-from .wri_answer import WriAnswer
+#from .wri_answer import WriAnswer
 from .attempts import Attempt
 from .rounds import Round
 from .recommendations import Recommendation

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, TIMESTAMP, SmallInteger, Numeric, ForeignKey
+from sqlalchemy import Column, TIMESTAMP, SmallInteger, Numeric, ForeignKey, Integer
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 import uuid
@@ -15,4 +15,5 @@ class Round(Base):
     question_count = Column(SmallInteger)
     accuracy = Column(Numeric)  # 0..1
     avg_time_secs = Column(Numeric)
-    hint_rate = Column(Numeric)
+    hints = Column(Numeric)
+    round_index = Column(Integer)
