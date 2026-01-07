@@ -3,23 +3,20 @@ import random
 import uuid
 
 from app.main import sio
-from sqlalchemy import Numeric, func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
 from ..models.attempts import Attempt
 from ..models.game import Game
 from ..models.game_players import GamePlayers
-from ..models.mc_answer import McAnswer
 from ..models.num_answer import NumAnswer
 from ..models.questions import Question
 from ..models.recommendations import Recommendation
 from ..models.rounds import Round
 from ..models.student_stats import StudentStats
 from ..models.users import User
-from ..models.wri_answer import WriAnswer
 from .ml_feedback import FeedbackRequest, derive_true_label, feedback_function
-
 from .ml_predict import DifficultyRequest, predict_function
 from .socket_auth import authenticate_socket_with_token
 
@@ -684,7 +681,18 @@ async def finish_round(sid, data):
             return
 
         user_id = session["user_id"]
-        finalize_round(db, data["round_id"], user_id)
+        try:
+            finalize_round(db, data["round_id"], user_id)
+        except Exception as e:
+            await sio.emit("finishRoundError", {"message": str(e)}, to=sid)
+            return
+
+        game_id = session.get("game_id")
+        if game_id:
+            try:
+                await emit_players(uuid.UUID(str(game_id)))
+            except Exception:
+                await emit_players(game_id)
     finally:
         db.close()
 
@@ -697,7 +705,7 @@ def finalize_round(db: Session, round_id, user_id):
             func.count(Attempt.id),
             func.avg(Attempt.time_spent_secs),
             func.sum(Attempt.hints_used),
-            func.avg(func.cast(Attempt.is_correct, Numeric)),
+            func.avg(case((Attempt.is_correct.is_(True), 1), else_=0)),
         )
         .filter(Attempt.round_id == round_id)
         .one()
@@ -725,14 +733,18 @@ def finalize_round(db: Session, round_id, user_id):
         )
     )
 
-    # Find previous round
-    prev_round = (
-        db.query(Round)
-        .filter(
-            Round.user_id == user_id, Round.round_index == round_obj.round_index - 1
-        )
-        .one_or_none()
-    )
+    prev_round = None
+    if round_obj.round_index is not None:
+        try:
+            prev_idx = int(round_obj.round_index) - 1
+        except Exception:
+            prev_idx = None
+        if prev_idx and prev_idx > 0:
+            prev_round = (
+                db.query(Round)
+                .filter(Round.user_id == user_id, Round.round_index == prev_idx)
+                .one_or_none()
+            )
 
     if prev_round:
         prev_rec = (
@@ -749,7 +761,7 @@ def finalize_round(db: Session, round_id, user_id):
             true_label = derive_true_label(prev_round, round_obj)
 
             prev_rec.true_label = true_label
-            prev_rec.labeled_at = datetime.now()
+            prev_rec.labeled_at = datetime.datetime.now()
             db.add(prev_rec)
             db.commit()
 
@@ -762,6 +774,10 @@ def finalize_round(db: Session, round_id, user_id):
                     sample_weight=5.0 * prev_rec.confidence,
                 )
             )
+
+    # Defaults to avoid unbound new_diff/rec_text at edges
+    new_diff = student.current_difficulty
+    rec_text = "same"
 
     if diff_response.label == 0:
         rec_text = "down"

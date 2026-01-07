@@ -15,6 +15,7 @@ export default function TeacherGamePage() {
 
     const gameId = String(params?.gameId ?? '');
     const topicName = search.get('topicName') || '';
+    const classroomId = search.get('classroomId') || '';
 
     const [players, setPlayers] = useState<string[]>([]);
     const [playersDetailed, setPlayersDetailed] = useState<
@@ -24,7 +25,47 @@ export default function TeacherGamePage() {
     const [error, setError] = useState<string | null>(null);
     const [hasStarted] = useState(true);
     const [isEnding, setIsEnding] = useState(false);
+    const [overrideLoading, setOverrideLoading] = useState<Record<string, 'up' | 'down' | null>>({});
+    const [overrideEligible, setOverrideEligible] = useState<Record<string, boolean>>({});
+    const [classroomName, setClassroomName] = useState<string>('');
     const socketRef = useRef<Socket | null>(null);
+    const lastOverrideRefreshAtRef = useRef<number>(0);
+
+    const dlog = (...args: any[]) => {
+        try {
+            if (typeof window !== 'undefined' && localStorage.getItem('debug_logs') === '1') {
+                console.log('[teacher-game]', ...args);
+            }
+        } catch {
+            // ignore
+        }
+    };
+
+    const refreshOverrideEligible = async (token: string, classroomNameToUse: string) => {
+        if (!token || !classroomNameToUse) return;
+        const now = Date.now();
+        if (now - lastOverrideRefreshAtRef.current < 1500) return;
+        lastOverrideRefreshAtRef.current = now;
+
+        try {
+            const res = await fetch(
+                `http://localhost:8000/override/recommendations/${encodeURIComponent(classroomNameToUse)}`,
+                { headers: { Authorization: `Bearer ${token}` } },
+            );
+            if (!res.ok) return;
+            const data = (await res.json()) as Array<any>;
+            const map: Record<string, boolean> = {};
+            for (const r of data || []) {
+                const username = String(r?.student ?? '');
+                if (!username) continue;
+                map[username] = Boolean(r?.last_recommendation);
+            }
+            setOverrideEligible(map);
+            dlog('overrideEligible', map);
+        } catch {
+            // ignore
+        }
+    };
 
     // Auth guards
     useEffect(() => {
@@ -59,7 +100,6 @@ export default function TeacherGamePage() {
         });
 
         socketRef.current = socket;
-
         socket.on('connect', () => {
             setIsConnecting(false);
             setError(null);
@@ -72,6 +112,7 @@ export default function TeacherGamePage() {
         });
 
         socket.on('updatePlayers', (data: { players?: string[]; playersDetailed?: any[] }) => {
+            dlog('updatePlayers', { players: data?.players?.length, detailed: data?.playersDetailed?.length });
             setPlayers(data?.players ?? []);
             if (Array.isArray(data?.playersDetailed)) {
                 setPlayersDetailed(
@@ -89,6 +130,8 @@ export default function TeacherGamePage() {
             } else {
                 setPlayersDetailed([]);
             }
+
+            if (classroomName) void refreshOverrideEligible(token, classroomName);
         });
 
         socket.on('gameClosed', () => {
@@ -100,7 +143,7 @@ export default function TeacherGamePage() {
         });
 
         return () => {
-            // End game 
+            // End game
             try {
                 socket.emit('endGame', { game_id: gameId });
             } catch {
@@ -109,6 +152,38 @@ export default function TeacherGamePage() {
             socketRef.current = null;
         };
     }, [isHydrated, isAuthenticated, user, gameId]);
+
+    useEffect(() => {
+        const token = localStorage.getItem('auth_token');
+        if (!token || !classroomId) return;
+        let cancelled = false;
+
+        const run = async () => {
+            try {
+                const res = await fetch('http://localhost:8000/classroom/my-classrooms', {
+                    headers: { Authorization: `Bearer ${token}` },
+                });
+                if (!res.ok) return;
+                const classrooms = (await res.json()) as Array<any>;
+                const cls = classrooms?.find((c) => String(c?.id ?? '') === String(classroomId));
+                const name = String(cls?.class_name ?? '');
+                if (!cancelled && name) setClassroomName(name);
+            } catch {
+                // ignore
+            }
+        };
+
+        run();
+        return () => {
+            cancelled = true;
+        };
+    }, [classroomId]);
+
+    useEffect(() => {
+        const token = localStorage.getItem('auth_token');
+        if (!token || !classroomName) return;
+        void refreshOverrideEligible(token, classroomName);
+    }, [classroomName]);
 
 
     if (!isHydrated || !isAuthenticated || !user || user.role !== 'teacher') {
@@ -129,6 +204,54 @@ export default function TeacherGamePage() {
             // ignore
         } finally {
             router.push('/teacher/dashboard');
+        }
+    };
+
+    const handleOverride = async (studentUsername: string, direction: 'up' | 'down') => {
+        const token = localStorage.getItem('auth_token');
+        if (!token) {
+            setError('Niste prijavljeni');
+            return;
+        }
+        if (!overrideEligible[studentUsername]) return;
+
+        setOverrideLoading((m) => ({ ...m, [studentUsername]: direction }));
+        setError(null);
+        try {
+            dlog('override click', { studentUsername, direction });
+            const res = await fetch('http://localhost:8000/override/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify({
+                    student_username: studentUsername,
+                    action: direction === 'up' ? 'override_up' : 'override_down',
+                }),
+            });
+
+            if (!res.ok) {
+                let detail = '';
+                try {
+                    const json = await res.json();
+                    detail = String(json?.detail ?? '');
+                } catch {
+                    // ignore
+                }
+                throw new Error(detail || `HTTP ${res.status}`);
+            }
+            dlog('override ok', { studentUsername, direction });
+
+            try {
+                socketRef.current?.emit('teacherJoin', { game_id: gameId, mode: 'game' });
+            } catch {
+                // ignore
+            }
+        } catch (e) {
+            setError(`Override nije uspio: ${(e as Error).message}`);
+        } finally {
+            setOverrideLoading((m) => ({ ...m, [studentUsername]: null }));
         }
     };
 
@@ -198,6 +321,34 @@ export default function TeacherGamePage() {
                                                     <span className="text-xs text-gray-500 dark:text-gray-400 tabular-nums">
                                                         {p.xp} XP
                                                     </span>
+                                                    {overrideEligible[p.username] ? (
+                                                        <>
+                                                            <button
+                                                                onClick={() => handleOverride(p.username, 'down')}
+                                                                disabled={
+                                                                    (overrideLoading[p.username] !== undefined &&
+                                                                        overrideLoading[p.username] !== null) ||
+                                                                    (p.level ?? 1) <= 1
+                                                                }
+                                                                className="btn btn-outline !py-1 !px-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                                title="Smanji level"
+                                                            >
+                                                                <i className="fa-solid fa-arrow-down" />
+                                                            </button>
+                                                            <button
+                                                                onClick={() => handleOverride(p.username, 'up')}
+                                                                disabled={
+                                                                    (overrideLoading[p.username] !== undefined &&
+                                                                        overrideLoading[p.username] !== null) ||
+                                                                    (p.level ?? 1) >= 5
+                                                                }
+                                                                className="btn btn-outline !py-1 !px-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                                title="Povećaj level"
+                                                            >
+                                                                <i className="fa-solid fa-arrow-up" />
+                                                            </button>
+                                                        </>
+                                                    ) : null}
                                                 </div>
                                             ) : null}
                                         </li>

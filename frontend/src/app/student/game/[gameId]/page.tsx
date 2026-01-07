@@ -28,6 +28,15 @@ export default function StudentGamePage() {
     const { user, isAuthenticated, isHydrated, logout } = useAuthStore();
     const gameId = String(params?.gameId ?? '');
 
+    const dlog = (...args: any[]) => {
+        try {
+            if (typeof window !== 'undefined' && localStorage.getItem('debug_logs') === '1') {
+                console.log('[student-game]', ...args);
+            }
+        } catch {
+        }
+    };
+
     const [payload, setPayload] = useState<ReceiveQuestionsPayload | null>(null);
     const [questionIndex, setQuestionIndex] = useState<number>(0);
     const [answer, setAnswer] = useState<string>('');
@@ -37,7 +46,70 @@ export default function StudentGamePage() {
     const [roundFeedback, setRoundFeedback] = useState<'hard' | 'ok' | 'easy' | null>(null);
     const [isLoadingNextBatch, setIsLoadingNextBatch] = useState(false);
     const [batchNumber, setBatchNumber] = useState<number>(0); // 1..5
+    const finishedRoundIdsRef = useRef<Record<string, boolean>>({});
     const lastRoundIdRef = useRef<string | null>(null);
+    const roundIndexByRoundIdRef = useRef<Record<string, number>>({});
+    const roundAggRef = useRef<{
+        answered: number;
+        correct: number;
+        totalTimeSecs: number;
+        totalHints: number;
+        totalQuestions: number;
+    }>({ answered: 0, correct: 0, totalTimeSecs: 0, totalHints: 0, totalQuestions: 0 });
+
+    const allocateRoundIndex = (roundId: string, token?: string | null) => {
+        if (!roundId) return 0;
+        const existing = roundIndexByRoundIdRef.current[roundId];
+        if (existing) return existing;
+
+        const getUserKeyFromJwt = (jwtToken: string) => {
+            try {
+                const parts = jwtToken.split('.');
+                if (parts.length < 2) return '';
+                const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+                const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : '';
+                const json = atob(b64 + pad);
+                const payload = JSON.parse(json) as any;
+                return String(payload?.id ?? payload?.sub ?? '');
+            } catch {
+                return '';
+            }
+        };
+
+        const tokenToUse =
+            token ?? (typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null);
+        const userKey = tokenToUse ? getUserKeyFromJwt(tokenToUse) : '';
+        if (!userKey) return 0;
+
+        const counterKey = `global_round_index_${userKey}`;
+        const mappingKey = `round_index_${roundId}`;
+
+        try {
+            const fromSession = sessionStorage.getItem(mappingKey);
+            if (fromSession) {
+                const n = Number(fromSession);
+                if (Number.isFinite(n) && n > 0) {
+                    roundIndexByRoundIdRef.current[roundId] = n;
+                    return n;
+                }
+            }
+        } catch {
+            // ignore
+        }
+
+        let next = 1;
+        try {
+            const current = Number(localStorage.getItem(counterKey) || '0');
+            next = (Number.isFinite(current) ? current : 0) + 1;
+            localStorage.setItem(counterKey, String(next));
+            sessionStorage.setItem(mappingKey, String(next));
+        } catch {
+            // ignore
+        }
+
+        roundIndexByRoundIdRef.current[roundId] = next;
+        return next;
+    };
 
     const currentQuestion = useMemo(() => payload?.questions?.[questionIndex] ?? null, [payload, questionIndex]);
 
@@ -82,19 +154,27 @@ export default function StudentGamePage() {
                 setQuestionIndex(0);
                 setBatchNumber(1);
                 lastRoundIdRef.current = String(parsed.round_id ?? '');
+                if (parsed.round_id) allocateRoundIndex(String(parsed.round_id), localStorage.getItem('auth_token'));
+                roundAggRef.current = {
+                    answered: 0,
+                    correct: 0,
+                    totalTimeSecs: 0,
+                    totalHints: 0,
+                    totalQuestions: Array.isArray(parsed?.questions) ? parsed.questions.length : 0,
+                };
             }
         } catch {
             // ignore
         }
     }, [gameId]);
 
-    // If payload isn't available yet (e.g. refresh), listen for receiveQuestions on the existing socket.
     useEffect(() => {
         const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
         if (!token) return;
 
         const socket = getAuthedSocket(token);
         const handleClosed = () => {
+            dlog('gameClosed');
             setError('Igra je završena');
             try {
                 localStorage.removeItem('joined_game_code');
@@ -107,11 +187,20 @@ export default function StudentGamePage() {
         const handler = (data: any) => {
             const incomingGameId = String(data?.game_id ?? '');
             if (incomingGameId && incomingGameId === String(gameId)) {
+                dlog('receiveQuestions', { gameId: incomingGameId, roundId: data?.round_id, count: data?.questions?.length });
                 const incomingRoundId = String(data?.round_id ?? '');
                 if (incomingRoundId && incomingRoundId === (lastRoundIdRef.current || '')) {
                     return; // ignore duplicate payload
                 }
                 lastRoundIdRef.current = incomingRoundId;
+                if (incomingRoundId) allocateRoundIndex(incomingRoundId, token);
+                roundAggRef.current = {
+                    answered: 0,
+                    correct: 0,
+                    totalTimeSecs: 0,
+                    totalHints: 0,
+                    totalQuestions: Array.isArray(data?.questions) ? data.questions.length : 0,
+                };
                 try {
                     sessionStorage.setItem(`game_payload_${incomingGameId}`, JSON.stringify(data));
                 } catch {
@@ -127,6 +216,10 @@ export default function StudentGamePage() {
 
         socket.on('receiveQuestions', handler);
         socket.on('gameClosed', handleClosed);
+        socket.on('finishRoundError', (d: any) => {
+            dlog('finishRoundError', d);
+            setError(String(d?.message ?? 'Greška pri završetku runde'));
+        });
         socket.on('answerSaved', (data: any) => {
             if (String(data?.question_id ?? '') === String(currentQuestion?.question_id ?? '')) {
                 setLastSaveStatus('saved');
@@ -139,12 +232,13 @@ export default function StudentGamePage() {
         return () => {
             socket.off('receiveQuestions', handler);
             socket.off('gameClosed', handleClosed);
+            socket.off('finishRoundError');
             socket.off('answerSaved');
             socket.off('answerError');
         };
     }, [gameId, currentQuestion?.question_id, router]);
 
-    // Reset timer when question changes (or first arrives)
+    // Reset timer when question changes
     useEffect(() => {
         if (!currentQuestion) return;
         setHasSubmitted(false);
@@ -187,6 +281,43 @@ export default function StudentGamePage() {
     }, [currentQuestion, hasSubmitted, questionStartedAt]);
 
     const isRoundComplete = Boolean(payload && questionIndex >= (payload.questions?.length ?? 0));
+
+    // When a round finishes, notify backend to finalize the round.
+    useEffect(() => {
+        if (!isRoundComplete) return;
+        const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+        const roundId = String(payload?.round_id ?? '');
+        if (!token || !roundId) return;
+        if (finishedRoundIdsRef.current[roundId]) return;
+        finishedRoundIdsRef.current[roundId] = true;
+
+        try {
+            const socket = getAuthedSocket(token);
+            const agg = roundAggRef.current;
+            const answered = Math.max(0, Number(agg.answered) || 0);
+            const correct = Math.max(0, Number(agg.correct) || 0);
+            const totalTimeSecs = Math.max(0, Number(agg.totalTimeSecs) || 0);
+            const totalHints = Math.max(0, Number(agg.totalHints) || 0);
+            const accuracy = answered > 0 ? correct / answered : 0;
+            const avgTimeSecs = answered > 0 ? totalTimeSecs / answered : 0;
+            const endTs = new Date().toISOString();
+            const roundIndex = allocateRoundIndex(roundId, token);
+
+            const finishPayload = {
+                round_id: roundId,
+                round_index: roundIndex,
+                end_ts: endTs,
+                accuracy,
+                avg_time_secs: avgTimeSecs,
+                hints: totalHints,
+            };
+
+            dlog('emit finish_round', finishPayload);
+            socket.emit('finish_round', finishPayload);
+        } catch {
+            // ignore
+        }
+    }, [isRoundComplete, payload?.round_id]);
 
     const computeTimeSpentSecs = (isAuto: boolean) => {
         const elapsed = (Date.now() - questionStartedAt) / 1000;
@@ -251,10 +382,14 @@ export default function StudentGamePage() {
             num_attempts: numAttemptsToSend,
         });
 
+        roundAggRef.current.answered += 1;
+        roundAggRef.current.correct += isCorrect ? 1 : 0;
+        roundAggRef.current.totalTimeSecs += timeSpentSecs;
+        roundAggRef.current.totalHints += hintClicksThisQuestion;
+
         setHasSubmitted(true);
         setFeedback(isCorrect ? 'Točno!' : isAuto ? 'Vrijeme je isteklo' : 'Netočno!');
 
-        // Move to next question (we'll do finish_round later)
         window.setTimeout(() => {
             setQuestionIndex((idx) => idx + 1);
         }, 350);
