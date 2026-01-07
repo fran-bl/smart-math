@@ -712,6 +712,7 @@ def finalize_round(db: Session, round_id, user_id):
     round_obj.hints = hints
     round_obj.accuracy = accuracy or 0
 
+    db.add(round_obj)
     db.commit()
     db.refresh(round_obj)
 
