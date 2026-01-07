@@ -12,10 +12,15 @@ class FeedbackRequest(BaseModel):
     avg_time: float
     hints_used: int
     true_label: int
+    sample_weight: float
 
 
 @router.post("/feedback")
 def feedback(data: FeedbackRequest):
+    return feedback_function(data)
+
+
+def feedback_function(data: FeedbackRequest):
     X = pd.DataFrame([{
         "accuracy": data.accuracy,
         "avg_time": data.avg_time,
@@ -29,10 +34,21 @@ def feedback(data: FeedbackRequest):
 
         model.partial_fit(
             X_scaled,
-            [data.true_label], # TODO: odredit pravu labelu po nekom kriteriju
-            sample_weight=[5.0] # TODO: odredit dobar sample weight - zasad svaki pravi primjer 5x "vazniji" od sintetickog
+            [data.true_label],
+            sample_weight=[data.sample_weight]
         )
 
         maybe_persist()
 
     return {"status": "learned"}
+
+
+def derive_true_label(prev_round, next_round, eps=0.1):
+    delta_acc = next_round.accuracy - prev_round.accuracy
+
+    if delta_acc > eps:
+        return 2
+    elif delta_acc < -eps:
+        return 0
+    else:
+        return 1
