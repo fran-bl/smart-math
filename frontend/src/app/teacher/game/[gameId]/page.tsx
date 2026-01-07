@@ -23,6 +23,7 @@ export default function TeacherGamePage() {
     const [isConnecting, setIsConnecting] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [hasStarted] = useState(true);
+    const [isEnding, setIsEnding] = useState(false);
     const socketRef = useRef<Socket | null>(null);
 
     // Auth guards
@@ -118,6 +119,19 @@ export default function TeacherGamePage() {
         );
     }
 
+    const handleEndGame = () => {
+        setIsEnding(true);
+        try {
+            if (socketRef.current && socketRef.current.connected) {
+                socketRef.current.emit('endGame', { game_id: gameId });
+            }
+        } catch {
+            // ignore
+        } finally {
+            router.push('/teacher/dashboard');
+        }
+    };
+
     return (
         <main className="min-h-screen p-4 sm:p-8 max-w-3xl mx-auto pb-12">
             <div className="card p-6 sm:p-8">
@@ -128,12 +142,16 @@ export default function TeacherGamePage() {
                             Učenici:
                         </p>
                     </div>
-                    <button
-                        onClick={() => router.push('/teacher/dashboard')}
-                        className="btn btn-outline !py-2 !px-4"
-                    >
-                        Natrag
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={handleEndGame}
+                            disabled={isEnding}
+                            className="btn btn-outline !py-2 !px-4 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {isEnding ? 'Prekidam…' : 'Prekini igru'}
+                        </button>
+
+                    </div>
                 </div>
 
                 {error && (
