@@ -10,20 +10,18 @@ from ..db import SessionLocal
 from ..models.attempts import Attempt
 from ..models.game import Game
 from ..models.game_players import GamePlayers
-from ..models.users import User
-from .socket_auth import authenticate_socket_with_token
-from sqlalchemy.orm import Session
-from ..models.questions import Question
-#from ..models.mc_answer import McAnswer
+from ..models.mc_answer import McAnswer
 from ..models.num_answer import NumAnswer
-#from ..models.wri_answer import WriAnswer
-from ..models.rounds import Round
-from ..models.attempts import Attempt
-from sqlalchemy import func, Numeric
-from .ml_predict import DifficultyRequest, predict_function
-from .ml_feedback import FeedbackRequest, derive_true_label, feedback_function
+from ..models.questions import Question
 from ..models.recommendations import Recommendation
+from ..models.rounds import Round
 from ..models.student_stats import StudentStats
+from ..models.users import User
+from ..models.wri_answer import WriAnswer
+from .ml_feedback import FeedbackRequest, derive_true_label, feedback_function
+
+from .ml_predict import DifficultyRequest, predict_function
+from .socket_auth import authenticate_socket_with_token
 
 questions = {}
 
@@ -436,6 +434,7 @@ async def startGame(sid, data):
         for gp in active:
             if not gp.socket_id:
                 continue
+
             student = (
                 db.query(User)
                 .filter(User.id == gp.user_id, User.role == "student")
@@ -444,31 +443,18 @@ async def startGame(sid, data):
             if not student:
                 continue
 
-        user_id = session["user_id"]
-        student = (db.query(User).filter((User.id == user_id)).first())
-        current_difficulty = student.current_difficulty
-        user_questions = generate_questions(topic_id, current_difficulty)
+            user_questions = generate_questions(
+                db, topic_id, student.current_difficulty
+            )
 
-
-        last_round = (
-            db.query(Round)
-            .filter(Round.user_id == user_id)
-            .order_by(Round.round_index.desc())
-            .first()
-        )
-
-        next_index = 0 if last_round is None else last_round.round_index + 1
-
-        # Create round
-        round_obj = Round(
-            user_id=user_id,
-            game_id=game.id,
-            question_count=len(user_questions),
-            round_index=next_index,
-        )
-        db.add(round_obj)
-        db.commit()
-        db.refresh(round_obj)
+            round_obj = Round(
+                user_id=student.id,
+                game_id=game.id,
+                question_count=len(user_questions),
+            )
+            db.add(round_obj)
+            db.commit()
+            db.refresh(round_obj)
 
         questions[room_key][gp.socket_id] = {
             "user_id": str(student.id),
@@ -729,20 +715,20 @@ def finalize_round(db: Session, round_id, user_id):
     db.commit()
     db.refresh(round_obj)
 
-    #call model
-    diff_response = predict_function(DifficultyRequest(
+    # call model
+    diff_response = predict_function(
+        DifficultyRequest(
             accuracy=round_obj.accuracy,
             avg_time=round_obj.avg_time_secs,
             hints_used=round_obj.hints,
         )
     )
 
-    #Find previous round
+    # Find previous round
     prev_round = (
         db.query(Round)
         .filter(
-            Round.user_id == user_id,
-            Round.round_index == round_obj.round_index - 1
+            Round.user_id == user_id, Round.round_index == round_obj.round_index - 1
         )
         .one_or_none()
     )
@@ -753,7 +739,7 @@ def finalize_round(db: Session, round_id, user_id):
             .filter(
                 Recommendation.user_id == user_id,
                 Recommendation.round_index == prev_round.round_index,
-                Recommendation.true_label.is_(None)
+                Recommendation.true_label.is_(None),
             )
             .one_or_none()
         )
@@ -766,12 +752,13 @@ def finalize_round(db: Session, round_id, user_id):
             db.add(prev_rec)
             db.commit()
 
-            feedback_function(FeedbackRequest(
+            feedback_function(
+                FeedbackRequest(
                     accuracy=prev_round.accuracy,
                     avg_time=prev_round.avg_time_secs,
                     hints_used=prev_round.hints,
                     true_label=true_label,
-                    sample_weight=5.0 * prev_rec.confidence
+                    sample_weight=5.0 * prev_rec.confidence,
                 )
             )
 
@@ -789,14 +776,14 @@ def finalize_round(db: Session, round_id, user_id):
 
     # create new recommendation based on model prediction and apply it instantly
     recommendation = Recommendation(
-            round_id = round_id,
-            user_id=user_id,
-            rec = rec_text,
-            confidence = diff_response.probabilities.get(diff_response.label, 1),
-            prev_difficulty = student.current_difficulty,
-            new_difficulty = new_diff,
-            round_index = round_obj.round_index
-        )
+        round_id=round_id,
+        user_id=user_id,
+        rec=rec_text,
+        confidence=diff_response.probabilities.get(diff_response.label, 1),
+        prev_difficulty=student.current_difficulty,
+        new_difficulty=new_diff,
+        round_index=round_obj.round_index,
+    )
     db.add(recommendation)
 
     student.current_difficulty = new_diff
