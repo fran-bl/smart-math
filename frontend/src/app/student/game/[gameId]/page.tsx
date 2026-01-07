@@ -113,22 +113,12 @@ export default function StudentGamePage() {
 
     const currentQuestion = useMemo(() => payload?.questions?.[questionIndex] ?? null, [payload, questionIndex]);
 
-    const QUESTION_TIME_LIMIT_SECS = 30;
     const [questionStartedAt, setQuestionStartedAt] = useState<number>(Date.now());
-    const [secondsLeft, setSecondsLeft] = useState<number>(QUESTION_TIME_LIMIT_SECS);
     const [hasSubmitted, setHasSubmitted] = useState<boolean>(false);
     const [attemptsThisQuestion, setAttemptsThisQuestion] = useState<number>(0);
     const [hintClicksThisQuestion, setHintClicksThisQuestion] = useState<number>(0);
     const [lastAttemptWasWrong, setLastAttemptWasWrong] = useState<boolean>(false);
     const [isHintOpen, setIsHintOpen] = useState<boolean>(false);
-    const timerRef = useRef<number | null>(null);
-
-    const timeLeftLabel = useMemo(() => {
-        const total = Math.max(0, Number(secondsLeft) || 0);
-        const mm = Math.floor(total / 60);
-        const ss = total % 60;
-        return `${mm}:${String(ss).padStart(2, '0')}`;
-    }, [secondsLeft]);
 
     useEffect(() => {
         if (isHydrated && (!isAuthenticated || !user)) router.push('/');
@@ -238,7 +228,7 @@ export default function StudentGamePage() {
         };
     }, [gameId, currentQuestion?.question_id, router]);
 
-    // Reset timer when question changes
+    // Reset when question changes
     useEffect(() => {
         if (!currentQuestion) return;
         setHasSubmitted(false);
@@ -250,35 +240,7 @@ export default function StudentGamePage() {
         setIsHintOpen(false);
         const start = Date.now();
         setQuestionStartedAt(start);
-        setSecondsLeft(QUESTION_TIME_LIMIT_SECS);
     }, [currentQuestion]);
-
-    // Countdown timer
-    useEffect(() => {
-        if (!currentQuestion) return;
-        if (hasSubmitted) return;
-
-        if (timerRef.current) {
-            window.clearInterval(timerRef.current);
-        }
-
-        timerRef.current = window.setInterval(() => {
-            const elapsed = (Date.now() - questionStartedAt) / 1000;
-            const left = Math.max(0, Math.ceil(QUESTION_TIME_LIMIT_SECS - elapsed));
-            setSecondsLeft(left);
-            if (left <= 0) {
-                // Auto-submit when time runs out
-                void finalizeQuestion(true);
-            }
-        }, 250);
-
-        return () => {
-            if (timerRef.current) {
-                window.clearInterval(timerRef.current);
-                timerRef.current = null;
-            }
-        };
-    }, [currentQuestion, hasSubmitted, questionStartedAt]);
 
     const isRoundComplete = Boolean(payload && questionIndex >= (payload.questions?.length ?? 0));
 
@@ -319,11 +281,9 @@ export default function StudentGamePage() {
         }
     }, [isRoundComplete, payload?.round_id]);
 
-    const computeTimeSpentSecs = (isAuto: boolean) => {
+    const computeTimeSpentSecs = () => {
         const elapsed = (Date.now() - questionStartedAt) / 1000;
-        return isAuto
-            ? QUESTION_TIME_LIMIT_SECS
-            : Math.max(0, Math.min(QUESTION_TIME_LIMIT_SECS, Math.round(elapsed)));
+        return Math.max(0, Math.round(elapsed));
     };
 
     const computeIsCorrect = () => {
@@ -351,7 +311,7 @@ export default function StudentGamePage() {
         return 'To je točan broj.';
     };
 
-    const finalizeQuestion = async (isAuto = false, attemptsOverride?: number) => {
+    const finalizeQuestion = async (attemptsOverride?: number) => {
         setError(null);
         setLastSaveStatus('saving');
         const token = localStorage.getItem('auth_token');
@@ -369,8 +329,8 @@ export default function StudentGamePage() {
             return;
         }
 
-        const isCorrect = isAuto ? false : computeIsCorrect();
-        const timeSpentSecs = computeTimeSpentSecs(isAuto);
+        const isCorrect = computeIsCorrect();
+        const timeSpentSecs = computeTimeSpentSecs();
         const numAttemptsToSend = Math.max(1, attemptsOverride ?? attemptsThisQuestion);
 
         socket.emit('submit_answer', {
@@ -388,7 +348,7 @@ export default function StudentGamePage() {
         roundAggRef.current.totalHints += hintClicksThisQuestion;
 
         setHasSubmitted(true);
-        setFeedback(isCorrect ? 'Točno!' : isAuto ? 'Vrijeme je isteklo' : 'Netočno!');
+        setFeedback(isCorrect ? 'Točno!' : 'Netočno!');
 
         window.setTimeout(() => {
             setQuestionIndex((idx) => idx + 1);
@@ -406,7 +366,7 @@ export default function StudentGamePage() {
         const isCorrect = computeIsCorrect();
         if (isCorrect) {
             setLastAttemptWasWrong(false);
-            await finalizeQuestion(false, nextAttempts);
+            await finalizeQuestion(nextAttempts);
         } else {
             setLastAttemptWasWrong(true);
             setFeedback('Netočno, pokušaj ponovno');
@@ -416,7 +376,6 @@ export default function StudentGamePage() {
     const canShowHintButton =
         currentQuestion?.type === 'num' &&
         !hasSubmitted &&
-        secondsLeft > 0 &&
         attemptsThisQuestion >= 1 &&
         lastAttemptWasWrong;
 
@@ -567,9 +526,6 @@ export default function StudentGamePage() {
                                     ? `Pitanje ${Math.min(questionIndex + 1, payload.questions.length)} / ${payload.questions.length}`
                                     : 'Pitanje'}
                             </p>
-                            <span className="text-sm font-bold tabular-nums text-gray-600 dark:text-gray-300">
-                                {timeLeftLabel}
-                            </span>
                         </div>
                         <div className="mb-6">
                             <p className="text-lg font-medium">{currentQuestion.question}</p>
@@ -597,7 +553,7 @@ export default function StudentGamePage() {
                             )}
                             <button
                                 onClick={() => void handleAttempt()}
-                                disabled={hasSubmitted || secondsLeft <= 0}
+                                disabled={hasSubmitted}
                                 className="btn btn-primary w-full py-3 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 Provjeri odgovor (pokušaji: {attemptsThisQuestion})
@@ -608,38 +564,30 @@ export default function StudentGamePage() {
                             const msg = feedback.trim().toLowerCase();
                             const kind = msg.includes('netočno')
                                 ? 'wrong'
-                                : msg.includes('vrijeme')
-                                    ? 'timeout'
-                                    : (msg.startsWith('točno') || msg === 'točno!')
-                                        ? 'correct'
-                                        : 'info';
+                                : (msg.startsWith('točno') || msg === 'točno!')
+                                    ? 'correct'
+                                    : 'info';
 
                             const boxClass =
                                 kind === 'correct'
                                     ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
-                                    : kind === 'timeout'
-                                        ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800'
-                                        : kind === 'wrong'
+                                    : kind === 'wrong'
                                             ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
                                             : 'bg-indigo-50 dark:bg-indigo-900/20 border-indigo-200 dark:border-indigo-800';
 
                             const textClass =
                                 kind === 'correct'
                                     ? 'text-green-700 dark:text-green-200'
-                                    : kind === 'timeout'
-                                        ? 'text-yellow-800 dark:text-yellow-200'
-                                        : kind === 'wrong'
+                                    : kind === 'wrong'
                                             ? 'text-red-700 dark:text-red-200'
                                             : 'text-indigo-700 dark:text-indigo-200';
 
                             const iconClass =
                                 kind === 'correct'
                                     ? 'fa-solid fa-circle-check'
-                                    : kind === 'timeout'
-                                        ? 'fa-solid fa-clock'
-                                        : kind === 'wrong'
-                                            ? 'fa-solid fa-triangle-exclamation'
-                                            : 'fa-solid fa-circle-info';
+                                    : kind === 'wrong'
+                                        ? 'fa-solid fa-triangle-exclamation'
+                                        : 'fa-solid fa-circle-info';
 
                             return (
                                 <div className={`mt-6 p-3 rounded-lg border ${boxClass}`}>
