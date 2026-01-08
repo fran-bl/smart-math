@@ -47,6 +47,7 @@ export default function TeacherDashboard() {
     const [students, setStudents] = useState<Student[]>([]);
     const [isLoadingStudents, setIsLoadingStudents] = useState(false);
     const [studentsError, setStudentsError] = useState<string | null>(null);
+    const [removingStudentId, setRemovingStudentId] = useState<string | null>(null);
 
     // Fetch classrooms
     const fetchClassrooms = useCallback(async () => {
@@ -88,6 +89,29 @@ export default function TeacherDashboard() {
             setIsLoadingStudents(false);
         }
     }, []);
+
+    const removeStudent = useCallback(async (studentId: string) => {
+        if (!selectedClassroom?.id) return;
+        const student = students.find((s) => s.id === studentId);
+        const label = student?.username ? `Ukloniti učenika "${student.username}" iz razreda?` : 'Ukloniti učenika iz razreda?';
+        if (typeof window !== 'undefined') {
+            const ok = window.confirm(label);
+            if (!ok) return;
+        }
+
+        setRemovingStudentId(studentId);
+        setStudentsError(null);
+        try {
+            await api.delete(`/classroom/${selectedClassroom.id}/students/${studentId}`);
+            await fetchStudents(selectedClassroom.id);
+            await fetchClassrooms(); // refresh student_count
+        } catch (err) {
+            console.error(err);
+            setStudentsError('Nije moguće ukloniti učenika');
+        } finally {
+            setRemovingStudentId(null);
+        }
+    }, [selectedClassroom?.id, students, fetchStudents, fetchClassrooms]);
 
     // Redirect to login if not authenticated
     useEffect(() => {
@@ -282,6 +306,18 @@ export default function TeacherDashboard() {
                                                                 Level {Number.isFinite(s.level) ? s.level : 0}
                                                             </span>
                                                         </span>
+                                                        <button
+                                                            onClick={() => void removeStudent(s.id)}
+                                                            disabled={removingStudentId === s.id}
+                                                            className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors disabled:opacity-60"
+                                                            title="Izbaci učenika iz razreda"
+                                                        >
+                                                            {removingStudentId === s.id ? (
+                                                                <i className="fa-solid fa-spinner animate-spin text-red-500" />
+                                                            ) : (
+                                                                <i className="fa-solid fa-minus text-red-500" />
+                                                            )}
+                                                        </button>
                                                     </li>
                                                 ))}
                                             </ul>

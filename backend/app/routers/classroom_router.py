@@ -194,8 +194,53 @@ def get_unassigned_students(
 
     return [{"id": str(s.id), "username": s.username} for s in students]
 
-#TODO: obrisi ucenika iz vec postojeceg razreda
 
+@router.delete(
+    "/{classroom_id}/students/{student_id}",
+    summary="Remove a student from a classroom (teacher only) and unassign them from all classrooms",
+)
+def remove_student_from_classroom(
+    classroom_id: str,
+    student_id: str,
+    db: db_dependency,
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != "teacher":
+        raise HTTPException(
+            status_code=403, detail="Only teachers can remove students."
+        )
+
+    classroom = (
+        db.query(Classroom)
+        .filter(Classroom.id == classroom_id, Classroom.teacher_id == current_user.id)
+        .first()
+    )
+    if not classroom:
+        raise HTTPException(status_code=404, detail="No such classroom.")
+
+    student = (
+        db.query(User).filter(User.id == student_id, User.role == "student").first()
+    )
+    if not student:
+        raise HTTPException(status_code=404, detail="No such student.")
+
+    # Must be in this teacher's classroom
+    membership_exists = (
+        db.execute(
+            user_classroom.select().where(
+                user_classroom.c.class_id == classroom.id,
+                user_classroom.c.user_id == student.id,
+            )
+        ).first()
+        is not None
+    )
+    if not membership_exists:
+        raise HTTPException(status_code=404, detail="Student is not in this classroom.")
+
+    db.execute(user_classroom.delete().where(user_classroom.c.user_id == student.id))
+    db.commit()
+
+    return {"message": "Student removed", "student_id": str(student.id)}
 
 
 @router.get(
