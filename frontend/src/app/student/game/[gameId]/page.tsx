@@ -52,6 +52,7 @@ export default function StudentGamePage() {
     const [roundXpEarned, setRoundXpEarned] = useState<number>(0);
     const [xpBursts, setXpBursts] = useState<Array<{ id: string; amount: number }>>([]);
     const [xpPulse, setXpPulse] = useState<number>(0);
+    const answerInputRef = useRef<HTMLInputElement | null>(null);
     const finishedRoundIdsRef = useRef<Record<string, boolean>>({});
     const lastRoundIdRef = useRef<string | null>(null);
     const roundIndexByRoundIdRef = useRef<Record<string, number>>({});
@@ -290,6 +291,14 @@ export default function StudentGamePage() {
         setIsHintOpen(false);
         const start = Date.now();
         setQuestionStartedAt(start);
+        window.setTimeout(() => {
+            try {
+                answerInputRef.current?.focus();
+                answerInputRef.current?.select();
+            } catch {
+                // ignore
+            }
+        }, 0);
     }, [currentQuestion]);
 
     const isRoundComplete = Boolean(payload && questionIndex >= (payload.questions?.length ?? 0));
@@ -629,8 +638,17 @@ export default function StudentGamePage() {
 
                         <div className="mb-4">
                             <input
+                                ref={answerInputRef}
+                                autoFocus
                                 value={answer}
                                 onChange={(e) => setAnswer(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if ('isComposing' in (e.nativeEvent as any) && (e.nativeEvent as any).isComposing) return;
+                                    if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        void handleAttempt();
+                                    }
+                                }}
                                 className="w-full px-4 py-3 rounded-xl border bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 outline-none"
                                 placeholder="Upiši odgovor…"
                             />
