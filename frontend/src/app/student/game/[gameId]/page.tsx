@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Spinner } from '@/components';
 import { disconnectSocket, getAuthedSocket } from '@/lib/realtime/socket';
 import { useAuthStore } from '@/lib/store';
+import styles from './xpBurst.module.css';
 
 type QuestionPayload = {
     question_id: string;
@@ -47,9 +48,15 @@ export default function StudentGamePage() {
     const [isLoadingNextBatch, setIsLoadingNextBatch] = useState(false);
     const [batchNumber, setBatchNumber] = useState<number>(0); // 1..5
     const [xp, setXp] = useState<number>(0);
+    const [roundFirstTryCorrect, setRoundFirstTryCorrect] = useState<number>(0);
+    const [roundXpEarned, setRoundXpEarned] = useState<number>(0);
+    const [xpBursts, setXpBursts] = useState<Array<{ id: string; amount: number }>>([]);
+    const [xpPulse, setXpPulse] = useState<number>(0);
     const finishedRoundIdsRef = useRef<Record<string, boolean>>({});
     const lastRoundIdRef = useRef<string | null>(null);
     const roundIndexByRoundIdRef = useRef<Record<string, number>>({});
+    const roundFirstTryCorrectRef = useRef<number>(0);
+    const roundXpEarnedRef = useRef<number>(0);
     const roundAggRef = useRef<{
         answered: number;
         correct: number;
@@ -153,7 +160,25 @@ export default function StudentGamePage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isHydrated, isAuthenticated, user?.role]);
 
-    // Load payload from sessionStorage (set by JoinGameModal upon receiveQuestions)
+    const resetRoundXpTracking = () => {
+        roundFirstTryCorrectRef.current = 0;
+        roundXpEarnedRef.current = 0;
+        setRoundFirstTryCorrect(0);
+        setRoundXpEarned(0);
+        setXpBursts([]);
+    };
+
+    const pushXpBurst = (amount: number) => {
+        if (amount <= 0) return;
+        const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+        setXpBursts((prev) => [...prev, { id, amount }]);
+        setXpPulse((n) => n + 1);
+        window.setTimeout(() => {
+            setXpBursts((prev) => prev.filter((b) => b.id !== id));
+        }, 900);
+    };
+
+    // Load payload from sessionStorage
     useEffect(() => {
         try {
             const raw = sessionStorage.getItem(`game_payload_${gameId}`);
@@ -167,6 +192,7 @@ export default function StudentGamePage() {
                 setQuestionIndex(0);
                 setBatchNumber(1);
                 lastRoundIdRef.current = String(parsed.round_id ?? '');
+                resetRoundXpTracking();
                 if (parsed.round_id) allocateRoundIndex(String(parsed.round_id), localStorage.getItem('auth_token'));
                 roundAggRef.current = {
                     answered: 0,
@@ -206,6 +232,7 @@ export default function StudentGamePage() {
                     return; // ignore duplicate payload
                 }
                 lastRoundIdRef.current = incomingRoundId;
+                resetRoundXpTracking();
                 if (incomingRoundId) allocateRoundIndex(incomingRoundId, token);
                 roundAggRef.current = {
                     answered: 0,
@@ -359,6 +386,26 @@ export default function StudentGamePage() {
         const isCorrect = computeIsCorrect();
         const timeSpentSecs = computeTimeSpentSecs();
         const numAttemptsToSend = Math.max(1, attemptsOverride ?? attemptsThisQuestion);
+
+        // XP logic from backend
+        if (isCorrect && numAttemptsToSend === 1) {
+            const totalQ = Math.max(0, Number(payload?.questions?.length ?? 0) || 0);
+            if (totalQ > 0) {
+                const nextFirstTry = roundFirstTryCorrectRef.current + 1;
+                const nextRoundXp = Math.floor((nextFirstTry * 100) / totalQ);
+                const delta = nextRoundXp - roundXpEarnedRef.current;
+
+                roundFirstTryCorrectRef.current = nextFirstTry;
+                roundXpEarnedRef.current = nextRoundXp;
+                setRoundFirstTryCorrect(nextFirstTry);
+                setRoundXpEarned(nextRoundXp);
+
+                if (delta > 0) {
+                    setXp((x) => x + delta);
+                    pushXpBurst(delta);
+                }
+            }
+        }
 
         socket.emit('submit_answer', {
             round_id: roundId,
@@ -553,9 +600,26 @@ export default function StudentGamePage() {
                                     ? `Pitanje ${Math.min(questionIndex + 1, payload.questions.length)} / ${payload.questions.length}`
                                     : 'Pitanje'}
                             </p>
-                            <div className="flex items-center gap-2 text-2xl font-extrabold text-amber-500">
-                                <i className="fa-solid fa-star" />
-                                <span>{xp}</span>
+                            <div className="flex flex-col items-end gap-1">
+                                <div className={`relative flex items-center gap-2 text-2xl font-extrabold text-amber-500 ${styles.xpCounter}`}>
+                                    <i className="fa-solid fa-star" />
+                                    <span key={xpPulse} className={styles.xpNumber}>{xp}</span>
+                                    <div className={styles.burstLayer} aria-hidden="true">
+                                        {xpBursts.map((b, idx) => (
+                                            <span key={b.id} className={styles.burst} style={{ ['--dx' as any]: `${((idx % 3) - 1) * 14}px` }}>
+                                                <span className={styles.burstText}>+{b.amount}</span>
+                                                <span className={styles.spark} style={{ ['--a' as any]: '0deg', ['--d' as any]: '24px', ['--s' as any]: '8px' }} />
+                                                <span className={styles.spark} style={{ ['--a' as any]: '45deg', ['--d' as any]: '18px', ['--s' as any]: '6px' }} />
+                                                <span className={styles.spark} style={{ ['--a' as any]: '90deg', ['--d' as any]: '26px', ['--s' as any]: '7px' }} />
+                                                <span className={styles.spark} style={{ ['--a' as any]: '135deg', ['--d' as any]: '20px', ['--s' as any]: '6px' }} />
+                                                <span className={styles.spark} style={{ ['--a' as any]: '180deg', ['--d' as any]: '24px', ['--s' as any]: '8px' }} />
+                                                <span className={styles.spark} style={{ ['--a' as any]: '225deg', ['--d' as any]: '18px', ['--s' as any]: '6px' }} />
+                                                <span className={styles.spark} style={{ ['--a' as any]: '270deg', ['--d' as any]: '26px', ['--s' as any]: '7px' }} />
+                                                <span className={styles.spark} style={{ ['--a' as any]: '315deg', ['--d' as any]: '20px', ['--s' as any]: '6px' }} />
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         <div className="mb-6">
