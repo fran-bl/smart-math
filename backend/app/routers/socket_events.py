@@ -453,22 +453,22 @@ async def startGame(sid, data):
             db.commit()
             db.refresh(round_obj)
 
-        questions[room_key][gp.socket_id] = {
-            "user_id": str(student.id),
-            "question_ids": [q["question_id"] for q in user_questions],
-            "round_id": str(round_obj.id),
-        }
-
-        await sio.emit(
-            "receiveQuestions",
-            {
-                "questions": user_questions,
-                "game_id": str(game.id),
-                "topic_id": str(topic_id),
+            questions[room_key][gp.socket_id] = {
+                "user_id": str(student.id),
+                "question_ids": [q["question_id"] for q in user_questions],
                 "round_id": str(round_obj.id),
-            },
-            to=gp.socket_id,
-        )
+            }
+
+            await sio.emit(
+                "receiveQuestions",
+                {
+                    "questions": user_questions,
+                    "game_id": str(game.id),
+                    "topic_id": str(topic_id),
+                    "round_id": str(round_obj.id),
+                },
+                to=gp.socket_id,
+            )
 
         await sio.emit("gameStarted", {"game_id": str(game.id)}, room=room_key)
     finally:
