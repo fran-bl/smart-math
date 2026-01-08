@@ -28,6 +28,7 @@ class AddStudentsReqest(BaseModel):
 class StudentOut(BaseModel):
     id: str
     username: str
+    level: int
 
 
 def generateClasroomCode():
@@ -232,7 +233,7 @@ def get_classroom_students(
         .order_by(User.username.asc())
         .all()
     )
-    return [{"id": str(s.id), "username": s.username} for s in students]
+    return [{"id": str(s.id), "username": s.username, "level": int(s.current_difficulty)}for s in students]
 
 
 @router.get(
@@ -264,4 +265,4 @@ def get_students_in_classroom_by_id(
         .all()
     )
 
-    return [{"id": str(s.id), "username": s.username} for s in students]
+    return [{"id": str(s.id), "username": s.username, "level": int(s.current_difficulty)}for s in students]

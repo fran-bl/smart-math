@@ -18,6 +18,7 @@ interface Classroom {
 interface Student {
     id: string;
     username: string;
+    level: number;
 }
 
 interface Topic {
@@ -277,6 +278,9 @@ export default function TeacherDashboard() {
                                                         <span className="flex items-center gap-2 font-medium">
                                                             <i className="fa-regular fa-user text-gray-400 dark:text-gray-500" />
                                                             {s.username}
+                                                            <span className="text-xs px-2 py-1 rounded-full bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300">
+                                                                Level {Number.isFinite(s.level) ? s.level : 0}
+                                                            </span>
                                                         </span>
                                                     </li>
                                                 ))}
