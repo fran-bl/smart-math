@@ -243,6 +243,39 @@ async def emit_players(game_id):
                     "recommendation_confidence": float(r.confidence) if r.confidence is not None else None,
                 }
 
+
+        # Last round performance per user
+        perf_map: dict[str, dict] = {}
+
+        if user_ids:
+            last_rounds = (
+                db.query(
+                    Round.user_id.label("user_id"),
+                    Round.accuracy,
+                    Round.avg_time_secs,
+                    Round.hints,
+                    Recommendation.prev_difficulty,
+                )
+                .outerjoin(Recommendation, Recommendation.round_id == Round.id)
+                .filter(Round.user_id.in_(user_ids))
+                .order_by(
+                    Round.user_id,
+                    desc(Round.end_ts).nulls_last(),
+                    desc(Round.id),
+                )
+                .distinct(Round.user_id)
+                .all()
+            )
+
+            for r in last_rounds:
+                perf_map[str(r.user_id)] = {
+                    "previous_level": int(r.prev_difficulty) if r.prev_difficulty is not None else None,
+                    "accuracy": float(r.accuracy) if r.accuracy is not None else None,
+                    "avg_time_secs": float(r.avg_time_secs) if r.avg_time_secs is not None else None,
+                    "hints_used": int(r.hints) if r.hints is not None else 0,
+                }
+
+
         # Rank players by XP (desc). If stats row doesn't exist, treat as 0.
         ranked = sorted(rows, key=lambda r: int(r.xp or 0), reverse=True)
         rank_by_user_id = {str(r.user_id): idx + 1 for idx, r in enumerate(ranked)}
@@ -255,6 +288,7 @@ async def emit_players(game_id):
                 "xp": int(r.xp or 0),
                 "rank": int(rank_by_user_id.get(str(r.user_id), 0) or 0),
                 **(rec_map.get(str(r.user_id)) or {}),
+                **(perf_map.get(str(r.user_id)) or {}),
             }
             for r in rows
         ]
@@ -890,7 +924,7 @@ async def finalize_round(db: Session, round_id, user_id, xp):
 
     stats.total_attempts = new_attempts
     stats.overall_accuracy = new_accuracy
-    stats.xp += xp_gained
+    stats.xp = xp_gained
 
     db.add(stats)
     db.commit()
