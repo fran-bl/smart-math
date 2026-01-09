@@ -131,8 +131,12 @@ export default function TeacherGamePage() {
                         user_id: String(p.user_id ?? ''),
                         username: String(p.username ?? ''),
                         level: Number(p.level ?? 1),
+                        previous_level: Number(p.previous_level ?? p.prev_level ?? p.level ?? 1),
                         xp: Number(p.xp ?? 0),
                         rank: Number(p.rank ?? 0),
+                        accuracy: typeof p.accuracy === 'number' ? p.accuracy : null,
+                        avg_time_secs: typeof p.avg_time_secs === 'number' ? p.avg_time_secs : null,
+                        hints_used: typeof p.hints_used === 'number' ? p.hints_used : null,
                         last_recommendation: (p?.last_recommendation ?? p?.lastRecommendation ?? null) as any,
                     }))
                     .filter((p) => p.user_id && p.username);
@@ -282,6 +286,37 @@ export default function TeacherGamePage() {
         }
     };
 
+    const renderReason = (p: {
+        level: number;
+        previous_level: number;
+        accuracy?: number | null;
+        avg_time_secs?: number | null;
+        hints_used?: number | null;
+        }) => {
+        if (p.level === p.previous_level) return null;
+
+        const direction = p.level > p.previous_level ? 'povećali' : 'smanjili';
+
+        const parts: string[] = [];
+
+        if (typeof p.accuracy === 'number') {
+            parts.push(`točnosti = ${Math.round(p.accuracy * 100)}%`);
+        }
+
+        if (typeof p.avg_time_secs === 'number') {
+            parts.push(`prosječnog vremena po pitanju = ${p.avg_time_secs.toFixed(1)} s`);
+        }
+
+        if (typeof p.hints_used === 'number') {
+            parts.push(`${p.hints_used} iskorištena hint-a`);
+        }
+
+        if (!parts.length) return null;
+
+        return `Zbog ${parts.join(', ')} ${direction} smo razinu.`;
+    };
+
+
     return (
         <main className="min-h-screen p-4 sm:p-8 max-w-3xl mx-auto pb-12">
             <div className="card p-6 sm:p-8">
@@ -324,63 +359,95 @@ export default function TeacherGamePage() {
                         style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
                     >
                         <div className="max-h-72 overflow-auto">
-                            <ul className="space-y-2">
-                                {(playersDetailed.length ? playersDetailed : players.map((p) => ({ user_id: p, username: p, level: 0, xp: 0, rank: 0 })))
-                                    .sort((a, b) => (a.rank && b.rank ? a.rank - b.rank : 0))
-                                    .map((p) => (
-                                        <li key={p.user_id} className="flex items-center justify-between gap-3 font-medium p-2 rounded-lg">
-                                            <div className="flex items-center gap-3 min-w-0">
-                                                {p.rank ? (
-                                                    <span className="w-8 text-center text-sm font-bold text-indigo-600 dark:text-indigo-400">
-                                                        #{p.rank}
-                                                    </span>
-                                                ) : (
-                                                    <span className="w-8" />
-                                                )}
-                                                <i className="fa-regular fa-user text-gray-400 dark:text-gray-500" />
+                            <table className="w-full text-sm border-collapse">
+                                <thead>
+                                    <tr className="text-left border-b">
+                                        <th className="py-2 px-2">Ime</th>
+                                        <th className="py-2 px-2">XP</th>
+                                        <th className="py-2 px-2">Prijašnji lvl</th>
+                                        <th className="py-2 px-2">Trenutni lvl</th>
+                                        <th className="py-2 px-2">Razlog</th>
+                                        <th className="py-2 px-2 text-center">Override</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {(playersDetailed.length
+                                        ? playersDetailed
+                                        : players.map((p) => ({
+                                            user_id: p,
+                                            username: p,
+                                        }))
+                                    ).map((p: any) => (
+                                        <tr
+                                            key={p.user_id}
+                                            className="border-b last:border-b-0 hover:bg-gray-50 dark:hover:bg-gray-800/40"
+                                        >
+                                            {/* Ime */}
+                                            <td className="py-2 px-2 flex items-center gap-2">
+                                                <i className="fa-regular fa-user text-gray-400" />
                                                 <span className="truncate">{p.username}</span>
-                                            </div>
-                                            {p.level ? (
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-xs px-2 py-1 rounded-full bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300">
-                                                        Level {p.level}
-                                                    </span>
-                                                    <span className="text-xs text-gray-500 dark:text-gray-400 tabular-nums">
-                                                        {p.xp} XP
-                                                    </span>
-                                                    {overrideEligible[p.username] ? (
-                                                        <>
-                                                            <button
-                                                                onClick={() => handleOverride(p.username, 'down')}
-                                                                disabled={
-                                                                    (overrideLoading[p.username] !== undefined &&
-                                                                        overrideLoading[p.username] !== null) ||
-                                                                    (p.level ?? 1) <= 1
-                                                                }
-                                                                className="btn btn-outline !py-1 !px-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                                                                title="Smanji level"
-                                                            >
-                                                                <i className="fa-solid fa-arrow-down" />
-                                                            </button>
-                                                            <button
-                                                                onClick={() => handleOverride(p.username, 'up')}
-                                                                disabled={
-                                                                    (overrideLoading[p.username] !== undefined &&
-                                                                        overrideLoading[p.username] !== null) ||
-                                                                    (p.level ?? 1) >= 5
-                                                                }
-                                                                className="btn btn-outline !py-1 !px-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                                                                title="Povećaj level"
-                                                            >
-                                                                <i className="fa-solid fa-arrow-up" />
-                                                            </button>
-                                                        </>
-                                                    ) : null}
-                                                </div>
-                                            ) : null}
-                                        </li>
+                                            </td>
+
+                                            {/* XP */}
+                                            <td className="py-2 px-2 tabular-nums">
+                                                {p.xp ?? '—'}
+                                            </td>
+
+                                            {/* Prijašnji level */}
+                                            <td className="py-2 px-2 text-center">
+                                                {p.previous_level ?? '—'}
+                                            </td>
+
+                                            {/* Trenutni level */}
+                                            <td className="py-2 px-2 text-center">
+                                                <span className="px-2 py-1 rounded-full text-xs bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300">
+                                                    {p.level ?? '—'}
+                                                </span>
+                                            </td>
+
+                                            {/* Razlog */}
+                                            <td className="py-2 px-2 max-w-xs">
+                                                {renderReason(p)}
+                                            </td>
+
+                                            {/* Strelica */}
+                                            <td className="py-2 px-2 text-center">
+                                                {overrideEligible[p.username] ? (
+                                                    <div className="flex items-center justify-center gap-1">
+                                                        <button
+                                                            onClick={() => handleOverride(p.username, 'down')}
+                                                            disabled={
+                                                                overrideLoading[p.username] !== undefined &&
+                                                                overrideLoading[p.username] !== null
+                                                            }
+                                                            className="btn btn-outline !py-1 !px-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                            title="Smanji level"
+                                                        >
+                                                            <i className="fa-solid fa-arrow-down" />
+                                                        </button>
+
+                                                        <button
+                                                            onClick={() => handleOverride(p.username, 'up')}
+                                                            disabled={
+                                                                overrideLoading[p.username] !== undefined &&
+                                                                overrideLoading[p.username] !== null
+                                                            }
+                                                            className="btn btn-outline !py-1 !px-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                            title="Povećaj level"
+                                                        >
+                                                            <i className="fa-solid fa-arrow-up" />
+                                                        </button>
+                                                    </div>
+                                                ) : (
+                                                    <span className="text-gray-400">—</span>
+                                                )}
+                                            </td>
+
+                                        </tr>
                                     ))}
-                            </ul>
+                                </tbody>
+                            </table>
+
                         </div>
                     </div>
                 )}
