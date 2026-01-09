@@ -23,3 +23,11 @@ dist/
 # Environment fajlovi
 .env
 .env.*
+
+source/
+# Datasetovi
+*.csv
+
+# Output mape
+model_output/
+model_output_simple/

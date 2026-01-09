@@ -1,7 +1,8 @@
-from sqlalchemy import Column, Text, Numeric, ForeignKey, CheckConstraint
+from sqlalchemy import Column, Text, Numeric, ForeignKey, CheckConstraint, TIMESTAMP, SmallInteger, Integer
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 from ..db import Base
+from sqlalchemy.sql import func
 
 class Recommendation(Base):
     __tablename__ = "recommendations"
@@ -11,7 +12,14 @@ class Recommendation(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
     rec = Column(Text)
     confidence = Column(Numeric)
+    prev_difficulty = Column(SmallInteger, nullable=False)
+    new_difficulty = Column(SmallInteger, nullable=False)
+    round_index = Column(Integer)
+    true_label = Column(Integer)
+    labeled_at = Column(TIMESTAMP(timezone=True))
 
     __table_args__ = (
         CheckConstraint("rec IN ('up','same','down')", name="rec_check"),
+        CheckConstraint("prev_difficulty BETWEEN 1 AND 5",name="prev_difficulty_check"),
+        CheckConstraint("new_difficulty BETWEEN 1 AND 5",name="new_difficulty_check"),
     )
