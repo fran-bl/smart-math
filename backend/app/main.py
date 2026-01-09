@@ -1,5 +1,6 @@
 import socketio
 from fastapi import FastAPI
+import os
 from fastapi.middleware.cors import CORSMiddleware
 
 from .routers import health, ml_feedback, ml_predict, test_db
@@ -10,11 +11,14 @@ from .routers.topics_router import router as topics_router
 from .routers.stats_router import router as stats_router
 from .routers.override_router import router as override_router
 
+FRONTEND_URL = os.getenv("FRONTEND_URL")
+
 sio = socketio.AsyncServer(
     async_mode="asgi",
     cors_allowed_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        FRONTEND_URL,
     ],
 )
 
