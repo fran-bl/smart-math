@@ -57,6 +57,7 @@ export default function StudentGamePage() {
     const lastRoundIdRef = useRef<string | null>(null);
     const roundIndexByRoundIdRef = useRef<Record<string, number>>({});
     const roundFirstTryCorrectRef = useRef<number>(0);
+    const [showWrongOverlay, setShowWrongOverlay] = useState(false);
     const roundXpEarnedRef = useRef<number>(0);
     const roundAggRef = useRef<{
         answered: number;
@@ -453,6 +454,9 @@ export default function StudentGamePage() {
         } else {
             setLastAttemptWasWrong(true);
             setFeedback('Netočno, pokušaj ponovno');
+
+            setShowWrongOverlay(true);
+            setTimeout(() => setShowWrongOverlay(false), 600);
         }
     };
 
@@ -753,6 +757,17 @@ export default function StudentGamePage() {
                     </div>
                 </div>
             )}
+
+            {showWrongOverlay && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center pointer-events-none">
+                    <i
+                        className="fa-solid fa-xmark text-red-600 text-[250px] font-black animate-wrongX"
+                        style={{ transform: 'translateY(-150px)' }}
+                    />
+                </div>
+            )}
+
+
         </main>
     );
 }
