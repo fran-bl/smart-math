@@ -139,7 +139,20 @@ export async function getCurrentUser(): Promise<MeResponse | null> {
  * Logout - clear stored credentials
  */
 export function logout(): void {
-    localStorage.removeItem(TOKEN_KEY);
+    if (typeof window === 'undefined') return;
+    try {
+        localStorage.clear();
+    } catch {
+        try {
+            localStorage.removeItem(TOKEN_KEY);
+            localStorage.removeItem('auth-storage');
+        } catch {
+        }
+    }
+    try {
+        sessionStorage.clear();
+    } catch {
+    }
 }
 
 /**

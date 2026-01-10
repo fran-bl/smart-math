@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import AuthBootstrap from "@/components/AuthBootstrap";
 
 export const metadata: Metadata = {
     title: "Smart Math",
@@ -17,6 +18,7 @@ export default function RootLayout({
                 <script src="https://kit.fontawesome.com/fb536f820a.js" crossOrigin="anonymous"></script>
             </head>
             <body className="antialiased">
+                <AuthBootstrap />
                 {children}
             </body>
         </html>

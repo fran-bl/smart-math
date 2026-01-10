@@ -1,3 +1,5 @@
+import { isJwtExpired } from '@/lib/utils/jwt';
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export class ApiError extends Error {
@@ -30,6 +32,27 @@ export async function apiClient<T>(
     const token = typeof window !== 'undefined'
         ? localStorage.getItem('auth_token')
         : null;
+
+    const clearSessionAndBroadcastLogout = (reason: 'expired' | 'unauthorized') => {
+        if (typeof window === 'undefined') return;
+        try {
+            localStorage.removeItem('auth_token');
+            localStorage.removeItem('auth-storage');
+            sessionStorage.clear();
+        } catch {
+            // ignore
+        }
+        try {
+            window.dispatchEvent(new CustomEvent('auth:logout', { detail: { reason } }));
+        } catch {
+            // ignore
+        }
+    };
+
+    if (token && isJwtExpired(token)) {
+        clearSessionAndBroadcastLogout('expired');
+        throw new ApiError('Sesija je istekla. Molimo prijavite se ponovno.', 401, 'TOKEN_EXPIRED');
+    }
 
     const headers: HeadersInit = {
         'Content-Type': 'application/json',
@@ -65,6 +88,9 @@ export async function apiClient<T>(
         }
 
         if (!response.ok) {
+            if (response.status === 401 || response.status === 403) {
+                clearSessionAndBroadcastLogout('unauthorized');
+            }
             const message =
                 (typeof data === 'string' && data) ||
                 data?.message ||
