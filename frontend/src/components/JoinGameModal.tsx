@@ -24,6 +24,7 @@ export function JoinGameModal({ isOpen, onClose, onJoined, onLeft, existingGameC
     const [error, setError] = useState<string | null>(null);
 
     const socketRef = useRef<Socket | null>(null);
+    const joinTimeoutRef = useRef<number | null>(null);
 
     const gameKeys = useMemo(() => PASSWORD_KEYS.filter(k => k !== 'E'), []);
     const isComplete = code.every(c => c !== '');
@@ -54,6 +55,10 @@ export function JoinGameModal({ isOpen, onClose, onJoined, onLeft, existingGameC
     };
 
     const cleanupSocket = () => {
+        if (joinTimeoutRef.current) {
+            window.clearTimeout(joinTimeoutRef.current);
+            joinTimeoutRef.current = null;
+        }
         if (socketRef.current) {
             socketRef.current.disconnect();
             socketRef.current = null;
@@ -61,7 +66,14 @@ export function JoinGameModal({ isOpen, onClose, onJoined, onLeft, existingGameC
     };
 
     const handleClose = () => {
-        if (!isJoined) cleanupSocket();
+        cleanupSocket();
+        if (isJoined) {
+            setIsJoined(false);
+            setIsConnecting(false);
+            setIsClosed(false);
+            setError(null);
+            onLeft?.();
+        }
         onClose();
     };
 
@@ -105,23 +117,27 @@ export function JoinGameModal({ isOpen, onClose, onJoined, onLeft, existingGameC
             socket.emit('joinGame', { game_code: codeToUse });
         }
 
-        const timeoutId = window.setTimeout(() => {
+        if (joinTimeoutRef.current) window.clearTimeout(joinTimeoutRef.current);
+        joinTimeoutRef.current = window.setTimeout(() => {
             setError('Nije moguće pridružiti se igri (timeout). Pokušaj ponovno.');
             setIsConnecting(false);
+            joinTimeoutRef.current = null;
         }, 8000);
 
         socket.on('joinedGame', () => {
             setIsJoined(true);
             setIsConnecting(false);
             onJoined?.(codeToUse);
-            window.clearTimeout(timeoutId);
+            if (joinTimeoutRef.current) window.clearTimeout(joinTimeoutRef.current);
+            joinTimeoutRef.current = null;
         });
 
         socket.on('updatePlayers', (data: { players: string[] }) => {
             setIsJoined(true);
             setIsConnecting(false);
             onJoined?.(codeToUse);
-            window.clearTimeout(timeoutId);
+            if (joinTimeoutRef.current) window.clearTimeout(joinTimeoutRef.current);
+            joinTimeoutRef.current = null;
         });
 
         socket.on('receiveQuestions', (data: any) => {
@@ -148,14 +164,16 @@ export function JoinGameModal({ isOpen, onClose, onJoined, onLeft, existingGameC
             setIsJoined(false);
             setIsClosed(true);
             onLeft?.();
-            window.clearTimeout(timeoutId);
+            if (joinTimeoutRef.current) window.clearTimeout(joinTimeoutRef.current);
+            joinTimeoutRef.current = null;
         });
 
         socket.on('error', (data: { message?: string }) => {
             setError(data?.message || 'Greška pri spajanju na igru');
             setIsConnecting(false);
             setIsJoined(false);
-            window.clearTimeout(timeoutId);
+            if (joinTimeoutRef.current) window.clearTimeout(joinTimeoutRef.current);
+            joinTimeoutRef.current = null;
         });
 
         socket.on('connect_error', (err: unknown) => {
@@ -166,7 +184,8 @@ export function JoinGameModal({ isOpen, onClose, onJoined, onLeft, existingGameC
             setError(msg || 'Greška pri povezivanju');
             setIsConnecting(false);
             setIsJoined(false);
-            window.clearTimeout(timeoutId);
+            if (joinTimeoutRef.current) window.clearTimeout(joinTimeoutRef.current);
+            joinTimeoutRef.current = null;
         });
 
         socket.on('disconnect', (reason) => {
@@ -183,14 +202,14 @@ export function JoinGameModal({ isOpen, onClose, onJoined, onLeft, existingGameC
     return (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="card p-6 max-w-md w-full relative animate-in fade-in zoom-in duration-200">
-                {!isJoined && (
-                    <button
-                        onClick={handleClose}
-                        className="absolute top-3 right-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                    >
-                        ✕
-                    </button>
-                )}
+                <button
+                    onClick={handleClose}
+                    className="absolute top-3 right-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                    aria-label={isJoined ? 'Odustani i napusti igru' : 'Zatvori'}
+                    title={isJoined ? 'Odustani' : 'Zatvori'}
+                >
+                    ✕
+                </button>
 
                 <h2 className="text-xl font-bold mb-2">Pridruži se igri</h2>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
